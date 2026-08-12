@@ -34,6 +34,7 @@
   ],
   "scripts": {
     "build": "bun run clean && tsc && rollup -c rollup.config.mjs",
+    "prepare": "bun run build",
     "clean": "rimraf ./dist",
     "watch": "tsc --watch",
     "verify": "bun run verify:web && bun run verify:android && bun run verify:ios",
