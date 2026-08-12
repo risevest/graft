@@ -27,16 +27,17 @@ declare module '@capacitor/cli' {
        * Only available on Android and iOS.
        *
        * @since 7.3.0
-       * @default false
+       * @default true
        */
       autoBlockRolledBackBundles?: boolean;
       /**
        * Whether or not to automatically delete unused bundles.
        *
        * When enabled, the plugin will automatically delete unused bundles after calling `ready()`.
+       * The active bundle, the next bundle and the last bundle that reached `ready()` are always kept.
        *
        * @since 5.0.0
-       * @default false
+       * @default true
        */
       autoDeleteBundles?: boolean;
       /**
@@ -84,18 +85,17 @@ declare module '@capacitor/cli' {
       publicKey?: string;
       /**
        * The timeout in milliseconds to wait for the app to be ready
-       * before resetting to the default bundle.
+       * before rolling back.
        *
-       * It is strongly **recommended** to configure this option (e.g. `10000` ms)
-       * so that the plugin can roll back to the default bundle in case of problems.
-       * If configured, the plugin will wait for the app to call the `ready()`
-       * method before resetting to the default bundle.
+       * The plugin waits for the app to call `ready()`. If that does not happen in time,
+       * it rolls back to the last bundle that did reach `ready()`, or to the bundle
+       * embedded in the binary when there is no such bundle.
        *
-       * Set to `0` to disable the timeout.
+       * Set to `0` to disable the timeout, which also disables automatic rollback —
+       * a bundle that fails to boot cannot report itself, so nothing else will catch it.
        *
        * @since 5.0.0
-       * @default 0
-       * @example 10000
+       * @default 10000
        */
       readyTimeout?: number;
       /**

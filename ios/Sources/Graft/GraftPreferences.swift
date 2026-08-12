@@ -5,6 +5,7 @@ public class GraftPreferences: NSObject {
     private let blockedBundleIdsKey = "blockedBundleIds" // DO NOT CHANGE
     private let channelKey = "channel" // DO NOT CHANGE
     private let customIdKey = "customId" // DO NOT CHANGE
+    private let lastKnownGoodBundleIdKey = "lastKnownGoodBundleId" // DO NOT CHANGE
     private let lastVersionCodeKey = "lastVersionCode" // DO NOT CHANGE
     private let lastVersionNameKey = "lastVersionName" // DO NOT CHANGE
     private let previousBundleIdKey = "previousBundleIdKey" // DO NOT CHANGE
@@ -23,6 +24,10 @@ public class GraftPreferences: NSObject {
 
     public func getCustomId() -> String? {
         return UserDefaults.standard.string(forKey: applyPrefix(to: customIdKey))
+    }
+
+    public func getLastKnownGoodBundleId() -> String? {
+        return UserDefaults.standard.string(forKey: applyPrefix(to: lastKnownGoodBundleIdKey))
     }
 
     public func getLastVersionCode() -> String? {
@@ -66,6 +71,15 @@ public class GraftPreferences: NSObject {
 
     public func setCustomId(_ value: String) {
         UserDefaults.standard.set(value, forKey: applyPrefix(to: customIdKey))
+        UserDefaults.standard.synchronize()
+    }
+
+    public func setLastKnownGoodBundleId(_ value: String?) {
+        if let value = value {
+            UserDefaults.standard.set(value, forKey: applyPrefix(to: lastKnownGoodBundleIdKey))
+        } else {
+            UserDefaults.standard.removeObject(forKey: applyPrefix(to: lastKnownGoodBundleIdKey))
+        }
         UserDefaults.standard.synchronize()
     }
 

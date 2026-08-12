@@ -229,6 +229,10 @@ import CommonCrypto
         completion(result, nil)
         // Set the new previous bundle ID
         setPreviousBundleId(bundleId: currentBundleId)
+        // A bundle that reaches this point booted, so it is the one to roll back to next time
+        if !rollbackPerformed {
+            preferences.setLastKnownGoodBundleId(currentBundleId)
+        }
         // Reset the rollback flag
         rollbackPerformed = false
     }
@@ -447,9 +451,10 @@ import CommonCrypto
         let bundleIds = getDownloadedBundleIds()
         let currentBundleId = getCurrentBundleId()
         let nextBundleId = getNextBundleId()
+        let lastKnownGoodBundleId = preferences.getLastKnownGoodBundleId()
 
         for bundleId in bundleIds {
-            if bundleId != currentBundleId && bundleId != nextBundleId {
+            if bundleId != currentBundleId && bundleId != nextBundleId && bundleId != lastKnownGoodBundleId {
                 do {
                     try deleteBundleById(bundleId)
                 } catch {
@@ -782,13 +787,25 @@ import CommonCrypto
         let currentBundleId = getCurrentBundleId()
         setPreviousBundleId(bundleId: currentBundleId)
         // Perform the rollback
-        if let _ = currentBundleId {
-            CAPLog.print("[", GraftPlugin.tag, "] ", "App is not ready. Rolling back to default bundle.")
-            setNextBundleById(nil)
-            setCurrentBundleById(nil)
+        if currentBundleId != nil {
+            let targetBundleId = resolveRollbackTargetBundleId()
+            let target = targetBundleId == nil ? "default bundle." : "bundle \(targetBundleId!)."
+            CAPLog.print("[", GraftPlugin.tag, "] ", "App is not ready. Rolling back to \(target)")
+            setNextBundleById(targetBundleId)
+            setCurrentBundleById(targetBundleId)
         } else {
             CAPLog.print("[", GraftPlugin.tag, "] ", "App is not ready. Default bundle is already in use.")
         }
+    }
+
+    private func resolveRollbackTargetBundleId() -> String? {
+        guard let bundleId = preferences.getLastKnownGoodBundleId() else {
+            return nil
+        }
+        if isBlockedBundleId(bundleId) || !hasBundleById(bundleId) {
+            return nil
+        }
+        return bundleId
     }
 
     private func searchIndexHtmlFile(url: URL) -> URL? {
@@ -905,6 +922,7 @@ import CommonCrypto
             resetConfig()
             // Capacitor clears its own serverBasePath on a new binary; our pointer is not covered by that
             GraftPointer.clearActiveBundleId()
+            preferences.setLastKnownGoodBundleId(nil)
             preferences.setLastVersionCode(currentVersionCode)
             preferences.setLastVersionName(currentVersionName)
         }

@@ -367,6 +367,10 @@ public class Graft {
         callback.success(result);
         // Set the new previous bundle ID
         setPreviousBundleId(currentBundleId);
+        // A bundle that reaches this point booted, so it is the one to roll back to next time
+        if (!rollbackPerformed) {
+            preferences.setLastKnownGoodBundleId(currentBundleId);
+        }
         // Reset the rollback flag
         rollbackPerformed = false;
     }
@@ -1165,7 +1169,8 @@ public class Graft {
     private boolean isBundleInUse(@NonNull String bundleId) {
         String currentBundleId = getCurrentBundleId();
         String nextBundleId = getNextBundleId();
-        return bundleId.equals(currentBundleId) || bundleId.equals(nextBundleId);
+        String lastKnownGoodBundleId = preferences.getLastKnownGoodBundleId();
+        return bundleId.equals(currentBundleId) || bundleId.equals(nextBundleId) || bundleId.equals(lastKnownGoodBundleId);
     }
 
     @Nullable
@@ -1245,11 +1250,23 @@ public class Graft {
         if (currentBundleId == null) {
             Logger.debug(GraftPlugin.TAG, "App is not ready. Default bundle is already in use.");
         } else {
-            Logger.debug(GraftPlugin.TAG, "App is not ready. Rolling back to default bundle.");
-            // Rollback to the default bundle
-            setNextBundleById(null);
-            setCurrentBundleById(null);
+            String targetBundleId = resolveRollbackTargetBundleId();
+            Logger.debug(
+                GraftPlugin.TAG,
+                "App is not ready. Rolling back to " + (targetBundleId == null ? "default bundle." : "bundle " + targetBundleId + ".")
+            );
+            setNextBundleById(targetBundleId);
+            setCurrentBundleById(targetBundleId);
         }
+    }
+
+    @Nullable
+    private String resolveRollbackTargetBundleId() {
+        String bundleId = preferences.getLastKnownGoodBundleId();
+        if (bundleId == null || isBlockedBundleId(bundleId) || !hasBundleById(bundleId)) {
+            return null;
+        }
+        return bundleId;
     }
 
     @Nullable
@@ -1375,6 +1392,7 @@ public class Graft {
             resetConfig();
             // Capacitor clears CAP_SERVER_PATH on a new binary; our own pointer is not covered by that
             GraftPointer.clearActiveBundleId(plugin.getContext());
+            preferences.setLastKnownGoodBundleId(null);
             preferences.setLastVersionCode(currentVersionCode);
         }
     }

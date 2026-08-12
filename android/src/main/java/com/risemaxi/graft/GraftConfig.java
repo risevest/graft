@@ -9,9 +9,9 @@ public class GraftConfig {
     @Nullable
     private String appId = null;
 
-    private boolean autoBlockRolledBackBundles = false;
+    private boolean autoBlockRolledBackBundles = true;
 
-    private boolean autoDeleteBundles = false;
+    private boolean autoDeleteBundles = true;
 
     @NonNull
     private String autoUpdateStrategy = "none";
@@ -24,7 +24,7 @@ public class GraftConfig {
     @Nullable
     private String publicKey = null;
 
-    private int readyTimeout = 0;
+    private int readyTimeout = 10000;
     private String serverDomain = "api.cloud.capawesome.io";
 
     @Nullable

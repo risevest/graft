@@ -20,6 +20,7 @@ public class GraftPreferences {
     private final String channelKey = "channel"; // DO NOT CHANGE
     private final String deviceIdKey = "deviceId"; // DO NOT CHANGE
     private final String customIdKey = "customId"; // DO NOT CHANGE
+    private final String lastKnownGoodBundleIdKey = "lastKnownGoodBundleId"; // DO NOT CHANGE
     private final String lastVersionCodeKey = "lastVersionCode"; // DO NOT CHANGE
     private final String previousBundleIdKey = "previousBundleId"; // DO NOT CHANGE
 
@@ -54,6 +55,13 @@ public class GraftPreferences {
                 .getSharedPreferences(GraftPlugin.SHARED_PREFERENCES_NAME, Activity.MODE_PRIVATE)
                 .getString(deviceIdKey + "_" + appId, null);
         }
+    }
+
+    @Nullable
+    public String getLastKnownGoodBundleId() {
+        return context
+            .getSharedPreferences(GraftPlugin.SHARED_PREFERENCES_NAME, Activity.MODE_PRIVATE)
+            .getString(lastKnownGoodBundleIdKey, null);
     }
 
     public int getLastVersionCode() {
@@ -115,6 +123,15 @@ public class GraftPreferences {
             settingsEditor.putString(deviceIdKey, deviceId);
         } else {
             settingsEditor.putString(deviceIdKey + "_" + appId, deviceId);
+        }
+        settingsEditor.apply();
+    }
+
+    public void setLastKnownGoodBundleId(@Nullable String bundleId) {
+        if (bundleId == null) {
+            settingsEditor.remove(lastKnownGoodBundleIdKey);
+        } else {
+            settingsEditor.putString(lastKnownGoodBundleIdKey, bundleId);
         }
         settingsEditor.apply();
     }
