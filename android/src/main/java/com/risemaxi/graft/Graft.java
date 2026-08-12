@@ -1,7 +1,5 @@
 package com.risemaxi.graft;
 
-import android.app.Activity;
-import android.content.SharedPreferences;
 import android.content.pm.PackageInfo;
 import android.content.pm.PackageManager;
 import android.content.res.AssetManager;
@@ -14,7 +12,6 @@ import androidx.annotation.Nullable;
 import androidx.core.content.pm.PackageInfoCompat;
 import com.getcapacitor.Bridge;
 import com.getcapacitor.Logger;
-import com.getcapacitor.plugin.WebView;
 import com.risemaxi.graft.classes.Manifest;
 import com.risemaxi.graft.classes.ManifestItem;
 import com.risemaxi.graft.classes.api.GetChannelsResponseItem;
@@ -100,10 +97,6 @@ public class Graft {
     @NonNull
     private final GraftPreferences preferences;
 
-    @NonNull
-    private final SharedPreferences.Editor webViewSettingsEditor;
-
-    private final String bundlesDirectory = "_capacitor_live_update_bundles"; // DO NOT CHANGE!
     private final Handler rollbackHandler = new Handler(Looper.getMainLooper());
     private final String manifestFileName = "capawesome-graft-manifest.json"; // DO NOT CHANGE!
 
@@ -117,7 +110,6 @@ public class Graft {
         this.httpClient = new GraftHttpClient(config);
         this.plugin = plugin;
         this.preferences = new GraftPreferences(plugin.getContext());
-        this.webViewSettingsEditor = plugin.getContext().getSharedPreferences(WebView.WEBVIEW_PREFS_NAME, Activity.MODE_PRIVATE).edit();
 
         // Check version and reset config if version changed
         checkAndResetConfigIfVersionChanged();
@@ -380,8 +372,7 @@ public class Graft {
     }
 
     public void reload() {
-        String path = getNextCapacitorServerPath();
-        setCurrentCapacitorServerPath(path);
+        setCurrentBundleById(getNextBundleId());
         startRollbackTimer();
     }
 
@@ -551,11 +542,11 @@ public class Graft {
     }
 
     private File buildBundlesDirectory() {
-        return new File(plugin.getContext().getFilesDir(), bundlesDirectory);
+        return GraftPointer.buildBundlesDirectory(plugin.getContext());
     }
 
     private File buildBundleDirectoryFor(@NonNull String bundleId) {
-        return new File(plugin.getContext().getFilesDir(), bundlesDirectory + "/" + bundleId);
+        return GraftPointer.buildBundleDirectory(plugin.getContext(), bundleId);
     }
 
     private File buildTemporaryDirectory() {
@@ -635,7 +626,7 @@ public class Graft {
     private void createBundlesDirectory() {
         File file = buildBundlesDirectory();
         if (!file.exists()) {
-            file.mkdir();
+            file.mkdirs();
         }
     }
 
@@ -1143,27 +1134,7 @@ public class Graft {
      */
     @Nullable
     private String getNextBundleId() {
-        String nextPath = getNextCapacitorServerPath();
-        if (nextPath.equals(defaultWebAssetDir)) {
-            return null;
-        }
-        return new File(nextPath).getName();
-    }
-
-    /**
-     * @return The absolute path to the next bundle directory (`public` for the built-in bundle).
-     */
-    @NonNull
-    private String getNextCapacitorServerPath() {
-        String path = plugin
-            .getContext()
-            .getSharedPreferences(WebView.WEBVIEW_PREFS_NAME, Activity.MODE_PRIVATE)
-            .getString(WebView.CAP_SERVER_PATH, defaultWebAssetDir);
-        // Empty path means default path
-        if (path.isEmpty()) {
-            path = defaultWebAssetDir;
-        }
-        return path;
+        return GraftPointer.getActiveBundleId(plugin.getContext());
     }
 
     /**
@@ -1334,10 +1305,9 @@ public class Graft {
      */
     private void setNextBundleById(@Nullable String bundleId) {
         if (bundleId == null) {
-            setNextCapacitorServerPath(defaultWebAssetDir);
+            GraftPointer.clearActiveBundleId(plugin.getContext());
         } else {
-            File bundleDirectory = buildBundleDirectoryFor(bundleId);
-            setNextCapacitorServerPath(bundleDirectory.getPath());
+            GraftPointer.setActiveBundleId(plugin.getContext(), bundleId);
         }
 
         // Notify listeners
@@ -1393,11 +1363,6 @@ public class Graft {
         return Arrays.asList(ids).contains(bundleId);
     }
 
-    private void setNextCapacitorServerPath(@NonNull String path) {
-        this.webViewSettingsEditor.putString(WebView.CAP_SERVER_PATH, path);
-        this.webViewSettingsEditor.commit();
-    }
-
     private void checkAndResetConfigIfVersionChanged() throws PackageManager.NameNotFoundException {
         int currentVersionCode = getVersionCodeAsInt();
         int lastVersionCode = preferences.getLastVersionCode();
@@ -1408,6 +1373,8 @@ public class Graft {
                 "App version changed (last: " + lastVersionCode + ", current: " + currentVersionCode + "), resetting config."
             );
             resetConfig();
+            // Capacitor clears CAP_SERVER_PATH on a new binary; our own pointer is not covered by that
+            GraftPointer.clearActiveBundleId(plugin.getContext());
             preferences.setLastVersionCode(currentVersionCode);
         }
     }

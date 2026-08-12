@@ -8,13 +8,10 @@ import CommonCrypto
 // swiftlint:disable type_body_length
 @objc public class Graft: NSObject {
     private let autoUpdateIntervalMs: Int64 = 15 * 60 * 1000 // 15 minutes
-    private let bundlesDirectory = "NoCloud/ionic_built_snapshots" // DO NOT CHANGE! (See https://dub.sh/BLluidt)
     private let cachesDirectoryUrl = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first!
     private let config: GraftConfig
     private let defaultWebAssetDir = "public" // DO NOT CHANGE! (See https://dub.sh/Buvz4yj)
-    private let defaultServerPathKey = "serverBasePath" // DO NOT CHANGE! (See https://dub.sh/ceDl0zT)
     private let httpClient: GraftHttpClient
-    private let libraryDirectoryUrl = FileManager.default.urls(for: .libraryDirectory, in: .userDomainMask).first!
     private let manifestFileName = "capawesome-graft-manifest.json" // DO NOT CHANGE!
     private let plugin: GraftPlugin
     private let preferences: GraftPreferences
@@ -237,8 +234,7 @@ import CommonCrypto
     }
 
     @objc public func reload() {
-        let path = getNextCapacitorServerPath()
-        setCurrentCapacitorServerPath(path: path)
+        setCurrentBundleById(getNextBundleId())
         startRollbackTimer()
     }
 
@@ -365,7 +361,7 @@ import CommonCrypto
         if let bundleId = bundleId {
             path = buildBundlePathFor(bundleId: bundleId)
         } else {
-            path = Bundle.main.bundleURL.appendingPathComponent(defaultWebAssetDir).path
+            path = GraftPointer.buildEmbeddedBundleDirectory().path
         }
         return path
     }
@@ -375,8 +371,7 @@ import CommonCrypto
     }
 
     private func buildBundleURLFor(bundleId: String) -> URL {
-        let url = libraryDirectoryUrl.appendingPathComponent(bundlesDirectory).appendingPathComponent(bundleId)
-        return url
+        return GraftPointer.buildBundleDirectory(bundleId: bundleId)
     }
 
     private func copyCurrentBundleFile(fileToCopy: ManifestItem, toDirectory: URL) throws {
@@ -417,11 +412,14 @@ import CommonCrypto
     }
 
     private func createBundlesDirectory() {
-        let bundlesDirectoryUrl = libraryDirectoryUrl.appendingPathComponent(bundlesDirectory)
+        var bundlesDirectoryUrl = GraftPointer.buildBundlesDirectory()
         let exists = FileManager.default.fileExists(atPath: bundlesDirectoryUrl.path)
         if !exists {
             do {
                 try FileManager.default.createDirectory(at: bundlesDirectoryUrl, withIntermediateDirectories: true, attributes: nil)
+                var resourceValues = URLResourceValues()
+                resourceValues.isExcludedFromBackup = true
+                try bundlesDirectoryUrl.setResourceValues(resourceValues)
             } catch {
                 CAPLog.print("[", GraftPlugin.tag, "] ", "Failed to create bundles directory.")
             }
@@ -616,7 +614,7 @@ import CommonCrypto
     }
 
     private func getDownloadedBundleIds() -> [String] {
-        let url = libraryDirectoryUrl.appendingPathComponent(bundlesDirectory)
+        let url = GraftPointer.buildBundlesDirectory()
         do {
             let pathExists = FileManager.default.fileExists(atPath: url.path)
             var files: [String] = []
@@ -695,21 +693,7 @@ import CommonCrypto
 
     /// - Returns: The next bundle ID or `nil` if the default bundle will be used.
     private func getNextBundleId() -> String? {
-        let path = getNextCapacitorServerPath()
-        let bundleId = URL(fileURLWithPath: path).lastPathComponent
-        if bundleId == defaultWebAssetDir {
-            return nil
-        }
-        return bundleId
-    }
-
-    /// - Returns: The absolute path to the next bundle directory.
-    private func getNextCapacitorServerPath() -> String {
-        let defaultCapacitorServerPath = buildCapacitorServerPathFor(bundleId: nil)
-        if let path = KeyValueStore.standard[self.defaultServerPathKey, as: String.self] {
-            return path.isEmpty ? defaultCapacitorServerPath : path
-        }
-        return defaultCapacitorServerPath
+        return GraftPointer.getActiveBundleId()
     }
 
     /// - Returns: The previous bundle ID or `nil` if the default bundle was used.
@@ -851,8 +835,11 @@ import CommonCrypto
 
     /// - Parameter bundleId: The bundle ID to set as the next bundle. If `nil`, the default bundle will be used.
     private func setNextBundleById(_ bundleId: String?) {
-        let path = buildCapacitorServerPathFor(bundleId: bundleId)
-        setNextCapacitorServerPath(path: path)
+        if let bundleId = bundleId {
+            GraftPointer.setActiveBundleId(bundleId)
+        } else {
+            GraftPointer.clearActiveBundleId()
+        }
 
         // Notify listeners
         notifyNextBundleSetListeners(bundleId)
@@ -904,16 +891,6 @@ import CommonCrypto
         return blockedList.contains(bundleId)
     }
 
-    private func setNextCapacitorServerPath(path: String) {
-        if path.hasSuffix("/public") {
-            // Must set an empty string to reset the custom server base path
-            KeyValueStore.standard[self.defaultServerPathKey] = ""
-        } else {
-            // Attention: Only the lastPathComponent is used (see https://dub.sh/BLluidt)
-            KeyValueStore.standard[self.defaultServerPathKey] = path
-        }
-    }
-
     private func checkAndResetConfigIfVersionChanged() {
         let currentVersionCode = getVersionCode()
         let currentVersionName = getVersionName()
@@ -926,6 +903,8 @@ import CommonCrypto
                 "App version changed (last: \(lastVersionName ?? "nil")/\(lastVersionCode ?? "nil"), current: \(currentVersionName)/\(currentVersionCode)), resetting config."
             )
             resetConfig()
+            // Capacitor clears its own serverBasePath on a new binary; our pointer is not covered by that
+            GraftPointer.clearActiveBundleId()
             preferences.setLastVersionCode(currentVersionCode)
             preferences.setLastVersionName(currentVersionName)
         }
