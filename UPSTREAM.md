@@ -43,11 +43,15 @@ first so shorter names do not shadow longer ones:
 | `capacitorLiveUpdate` | `risemaxiGraft` |
 | `LiveUpdate` | `Graft` |
 
-Layout changes: `ios/Plugin/` became `ios/Sources/GraftPlugin/` for SwiftPM, and the Capacitor plugin
-identifier is `Graft`. The SwiftPM target stays `GraftPlugin` rather than `Graft` so the module name
-does not collide with the `Graft` class, which is why consumers write `import GraftPlugin`. The
-SwiftPM *product* is `RisemaxiGraft`, which is what `cap sync` writes into the app's generated
-`CapApp-SPM/Package.swift`.
+Layout changes: `ios/Plugin/` became `ios/Sources/RisemaxiGraft/` for SwiftPM, and the Capacitor
+plugin identifier is `Graft`.
+
+The SwiftPM target and product are both named `RisemaxiGraft`, and they have to match. `cap sync`
+adds the *product* to the app's generated `CapApp-SPM/Package.swift`, but Swift imports the *target*
+name — and a target whose name differs from its product is not resolvable from the app target, which
+fails as `Unable to resolve module dependency`. So consumers write `import RisemaxiGraft`. This only
+matters for plugins the app touches from its own Swift code; the other Capacitor plugins are reached
+from JS and never imported.
 
 Not vendored: the Capawesome Cloud client and its API surface, `example/`, `ios/Plugin.xcodeproj`
 (SwiftPM covers the build), and the upstream test scaffolding, which does not compile.
