@@ -1,0 +1,15 @@
+Graft (@risemaxi/graft)
+
+This product is a fork of @capawesome/capacitor-live-update.
+
+    Copyright (c) 2022 Robin Genz
+    Licensed under the MIT License
+    https://github.com/capawesome-team/capacitor-plugins/tree/main/packages/live-update
+
+The bundle lifecycle — download, staging, atomic install, pointer management,
+rollback, watchdog and retention — derives from that work. Graft replaces the
+Capawesome Cloud client with a self-hosted channel protocol, moves the active
+bundle pointer out of Capacitor's own preferences so the WebView loads exactly
+once, and adds per-file binary deltas.
+
+See UPSTREAM.md for the pinned fork point and the rebase procedure.

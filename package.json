@@ -1,0 +1,75 @@
+{
+  "name": "@risemaxi/graft",
+  "version": "0.1.0",
+  "description": "Self-hosted over-the-air web bundle updates for Capacitor apps, applied before the WebView loads.",
+  "main": "dist/plugin.cjs.js",
+  "module": "dist/esm/index.js",
+  "types": "dist/esm/index.d.ts",
+  "unpkg": "dist/plugin.js",
+  "files": [
+    "android/src/main/",
+    "android/build.gradle",
+    "dist/",
+    "ios/Sources/",
+    "RisemaxiGraft.podspec",
+    "Package.swift",
+    "NOTICE"
+  ],
+  "author": "Rise",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/risemaxi/graft.git"
+  },
+  "keywords": [
+    "capacitor",
+    "capacitor-plugin",
+    "ota",
+    "over-the-air",
+    "live-update",
+    "binary-delta",
+    "zstd",
+    "android",
+    "ios"
+  ],
+  "scripts": {
+    "build": "bun run clean && tsc && rollup -c rollup.config.mjs",
+    "clean": "rimraf ./dist",
+    "watch": "tsc --watch",
+    "verify": "bun run verify:web && bun run verify:android && bun run verify:ios",
+    "verify:web": "bun run build",
+    "verify:android": "cd android && ./gradlew assembleDebug",
+    "verify:ios": "xcodebuild -scheme RisemaxiGraft -destination 'generic/platform=iOS' -derivedDataPath .build/xcode",
+    "lint": "bun run eslint && bun run prettier -- --check",
+    "fmt": "bun run eslint -- --fix && bun run prettier -- --write",
+    "eslint": "eslint . --ext ts",
+    "prettier": "prettier \"**/*.{css,html,ts,js,java}\""
+  },
+  "devDependencies": {
+    "@capacitor/android": "8.5.0",
+    "@capacitor/cli": "8.4.2",
+    "@capacitor/core": "8.5.0",
+    "@capacitor/ios": "8.5.0",
+    "@ionic/eslint-config": "0.4.0",
+    "eslint": "8.57.0",
+    "prettier": "3.4.2",
+    "prettier-plugin-java": "2.9.7",
+    "rimraf": "6.1.2",
+    "rollup": "4.62.3",
+    "typescript": "5.9.3"
+  },
+  "peerDependencies": {
+    "@capacitor/core": ">=8.0.0"
+  },
+  "eslintConfig": {
+    "extends": "@ionic/eslint-config/recommended"
+  },
+  "capacitor": {
+    "ios": {
+      "src": "ios"
+    },
+    "android": {
+      "src": "android"
+    }
+  }
+}
