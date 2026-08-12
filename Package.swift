@@ -7,7 +7,7 @@ let package = Package(
     products: [
         .library(
             name: "RisemaxiGraft",
-            targets: ["Graft"])
+            targets: ["GraftPlugin"])
     ],
     dependencies: [
         .package(url: "https://github.com/ionic-team/capacitor-swift-pm.git", from: "8.0.0"),
@@ -16,13 +16,13 @@ let package = Package(
     ],
     targets: [
         .target(
-            name: "Graft",
+            name: "GraftPlugin",
             dependencies: [
                 .product(name: "Capacitor", package: "capacitor-swift-pm"),
                 .product(name: "Cordova", package: "capacitor-swift-pm"),
                 .product(name: "Alamofire", package: "Alamofire"),
                 .product(name: "ZIPFoundation", package: "ZIPFoundation")
             ],
-            path: "ios/Sources/Graft")
+            path: "ios/Sources/GraftPlugin")
     ]
 )
