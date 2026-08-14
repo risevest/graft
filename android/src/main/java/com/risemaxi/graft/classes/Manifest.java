@@ -1,6 +1,7 @@
 package com.risemaxi.graft.classes;
 
 import androidx.annotation.NonNull;
+import androidx.annotation.Nullable;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -25,8 +26,16 @@ public class Manifest {
 
     private final long counter;
     private final long minNativeBuild;
-    private final long notBefore;
-    private final long expiresAt;
+
+    /**
+     * Replay bounds. Absent on the manifest generated for the bundle embedded in the binary, which
+     * is never installed and so never verified; required of anything served on a channel.
+     */
+    @Nullable
+    private final Long notBefore;
+
+    @Nullable
+    private final Long expiresAt;
 
     @NonNull
     private final List<ManifestFile> files = new ArrayList<>();
@@ -40,8 +49,8 @@ public class Manifest {
         this.channel = json.getString("channel");
         this.counter = json.getLong("counter");
         this.minNativeBuild = json.getLong("minNativeBuild");
-        this.notBefore = json.getLong("notBefore");
-        this.expiresAt = json.getLong("expiresAt");
+        this.notBefore = json.has("notBefore") ? json.getLong("notBefore") : null;
+        this.expiresAt = json.has("expiresAt") ? json.getLong("expiresAt") : null;
         JSONArray filesJson = json.getJSONArray("files");
         for (int i = 0; i < filesJson.length(); i++) {
             files.add(new ManifestFile(filesJson.getJSONObject(i)));
@@ -69,11 +78,13 @@ public class Manifest {
         return minNativeBuild;
     }
 
-    public long getNotBefore() {
+    @Nullable
+    public Long getNotBefore() {
         return notBefore;
     }
 
-    public long getExpiresAt() {
+    @Nullable
+    public Long getExpiresAt() {
         return expiresAt;
     }
 

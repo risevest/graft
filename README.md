@@ -104,10 +104,14 @@ and upload, and never parsed before the signature verifies.
 }
 ```
 
-Every field is required. After the signature verifies, the manifest is rejected unless `id`,
-`counter` and `minNativeBuild` match the channel entry, `channel` matches the channel it was fetched
-from, `minNativeBuild <= versionCode`, `counter > highestInstalledCounter`, and
+After the signature verifies, the manifest is rejected unless `id`, `counter` and `minNativeBuild`
+match the channel entry, `channel` matches the channel it was fetched from,
+`minNativeBuild <= versionCode`, `counter > highestInstalledCounter`, and
 `notBefore <= now < expiresAt`. `href` must be a relative path with no `.` or `..` segment.
+
+`notBefore` and `expiresAt` are the only optional fields, and only because the manifest generated
+for the embedded bundle has no replay window to describe — it is never fetched, so it is never
+verified. A manifest served on a channel that omits them is rejected.
 
 Each installed file is verified against its `sha256` — whether downloaded or copied from the running
 bundle — and the manifest is written into the bundle directory only after every file has passed, so

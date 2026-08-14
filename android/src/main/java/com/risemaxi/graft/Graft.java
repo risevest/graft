@@ -467,8 +467,13 @@ public class Graft {
         if (manifest.getCounter() <= preferences.getHighestInstalledCounter()) {
             throw new Exception(GraftPlugin.ERROR_MANIFEST_MISMATCH);
         }
+        Long notBefore = manifest.getNotBefore();
+        Long expiresAt = manifest.getExpiresAt();
+        if (notBefore == null || expiresAt == null) {
+            throw new Exception(GraftPlugin.ERROR_MANIFEST_EXPIRED);
+        }
         long now = System.currentTimeMillis() / 1000;
-        if (now < manifest.getNotBefore() || now >= manifest.getExpiresAt()) {
+        if (now < notBefore || now >= expiresAt) {
             throw new Exception(GraftPlugin.ERROR_MANIFEST_EXPIRED);
         }
     }

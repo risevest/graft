@@ -280,7 +280,8 @@ import Capacitor
             throw CustomError.manifestMismatch
         }
         let now = Int(Date().timeIntervalSince1970)
-        guard now >= manifest.notBefore, now < manifest.expiresAt else {
+        guard let notBefore = manifest.notBefore, let expiresAt = manifest.expiresAt,
+              now >= notBefore, now < expiresAt else {
             throw CustomError.manifestExpired
         }
     }

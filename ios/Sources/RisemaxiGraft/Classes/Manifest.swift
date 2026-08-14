@@ -9,8 +9,10 @@ public struct Manifest: Decodable {
     let channel: String
     let counter: Int
     let minNativeBuild: Int
-    let notBefore: Int
-    let expiresAt: Int
+    /// Replay bounds. Absent on the manifest generated for the bundle embedded in the binary, which
+    /// is never installed and so never verified; required of anything served on a channel.
+    let notBefore: Int?
+    let expiresAt: Int?
     let files: [ManifestFile]
 
     private enum CodingKeys: String, CodingKey {
@@ -27,8 +29,8 @@ public struct Manifest: Decodable {
         channel = try container.decode(String.self, forKey: .channel)
         counter = try container.decode(Int.self, forKey: .counter)
         minNativeBuild = try container.decode(Int.self, forKey: .minNativeBuild)
-        notBefore = try container.decode(Int.self, forKey: .notBefore)
-        expiresAt = try container.decode(Int.self, forKey: .expiresAt)
+        notBefore = try container.decodeIfPresent(Int.self, forKey: .notBefore)
+        expiresAt = try container.decodeIfPresent(Int.self, forKey: .expiresAt)
         files = try container.decode([ManifestFile].self, forKey: .files)
         guard !files.isEmpty else {
             throw DecodingError.dataCorruptedError(forKey: .files, in: container, debugDescription: "Manifest lists no files.")
