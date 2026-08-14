@@ -23,6 +23,13 @@ public enum GraftPointer {
         return directory
     }
 
+    /// The id of the bundle this launch resolved, or `nil` for the embedded one. Unlike the bridge's
+    /// server path this is available before the WebView exists.
+    public static func resolveActiveBundleId() -> String? {
+        let name = resolveActiveBundleDirectory().lastPathComponent
+        return name == embeddedWebAssetDir ? nil : name
+    }
+
     public static func buildEmbeddedBundleDirectory() -> URL {
         return Bundle.main.bundleURL.appendingPathComponent(embeddedWebAssetDir)
     }

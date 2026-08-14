@@ -96,7 +96,7 @@ import Capacitor
     /// What the page is told about the bundle it is running, as JSON, so an app never has to compile
     /// a release identifier into its own bundle.
     @objc public func releaseIdentityJSON() -> String {
-        let releaseId = getCurrentBundleId() ?? GraftPointer.readEmbeddedManifest()?.id
+        let releaseId = GraftPointer.resolveActiveBundleId() ?? GraftPointer.readEmbeddedManifest()?.id
         let identity: [String: Any] = [
             "nativeBuild": GraftPointer.readNativeBuild() ?? NSNull(),
             "releaseId": releaseId ?? NSNull()

@@ -50,6 +50,16 @@ public final class GraftPointer {
         return null;
     }
 
+    /**
+     * @return The id of the bundle this launch resolved, or `null` for the embedded one. Unlike the
+     *         bridge's server path this is available before the WebView exists.
+     */
+    @Nullable
+    public static String resolveActiveBundleId(@NonNull Context context) {
+        File directory = resolveActiveBundleDirectory(context);
+        return directory == null ? null : directory.getName();
+    }
+
     @Nullable
     public static String getActiveBundleId(@NonNull Context context) {
         return getPreferences(context).getString(ACTIVE_BUNDLE_ID_KEY, null);

@@ -186,7 +186,7 @@ public class Graft {
      */
     @NonNull
     public JSObject getReleaseIdentity() {
-        String releaseId = getCurrentBundleId();
+        String releaseId = GraftPointer.resolveActiveBundleId(plugin.getContext());
         if (releaseId == null) {
             Manifest embeddedManifest = GraftPointer.readEmbeddedManifest(plugin.getContext());
             releaseId = embeddedManifest == null ? null : embeddedManifest.getId();

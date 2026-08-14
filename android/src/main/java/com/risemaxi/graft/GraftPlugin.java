@@ -82,8 +82,8 @@ public class GraftPlugin extends Plugin {
             Logger.warn(TAG, "This WebView cannot run a document-start script, so releaseIdentity() will return null.");
             return;
         }
-        String script = "globalThis." + RELEASE_IDENTITY_KEY + " = " + graft.getReleaseIdentity() + ";";
         try {
+            String script = "globalThis." + RELEASE_IDENTITY_KEY + " = " + graft.getReleaseIdentity() + ";";
             WebViewCompat.addDocumentStartJavaScript(getBridge().getWebView(), script, Collections.singleton(getBridge().getLocalUrl()));
         } catch (Exception exception) {
             Logger.error(TAG, "Failed to publish the release identity to the page.", exception);
