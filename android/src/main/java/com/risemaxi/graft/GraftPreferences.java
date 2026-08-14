@@ -9,144 +9,90 @@ import java.util.UUID;
 
 public class GraftPreferences {
 
-    @NonNull
-    private final Context context;
+    static final String BLOCKED_BUNDLE_IDS_KEY = "blockedBundleIds";
+    static final String CHANNEL_KEY = "channel";
+    static final String HIGHEST_INSTALLED_COUNTER_KEY = "highestInstalledCounter";
+    static final String INSTALL_ID_KEY = "installId";
+    static final String LAST_KNOWN_GOOD_BUNDLE_ID_KEY = "lastKnownGoodBundleId";
+    static final String LAST_NATIVE_BUILD_KEY = "lastNativeBuild";
+    static final String PREVIOUS_BUNDLE_ID_KEY = "previousBundleId";
 
     @NonNull
-    private final SharedPreferences.Editor settingsEditor;
-
-    private final String appIdKey = "appId"; // DO NOT CHANGE
-    private final String blockedBundleIdsKey = "blockedBundleIds"; // DO NOT CHANGE
-    private final String channelKey = "channel"; // DO NOT CHANGE
-    private final String deviceIdKey = "deviceId"; // DO NOT CHANGE
-    private final String customIdKey = "customId"; // DO NOT CHANGE
-    private final String lastKnownGoodBundleIdKey = "lastKnownGoodBundleId"; // DO NOT CHANGE
-    private final String lastVersionCodeKey = "lastVersionCode"; // DO NOT CHANGE
-    private final String previousBundleIdKey = "previousBundleId"; // DO NOT CHANGE
+    private final SharedPreferences preferences;
 
     public GraftPreferences(@NonNull Context context) {
-        this.context = context;
-        this.settingsEditor = context.getSharedPreferences(GraftPlugin.SHARED_PREFERENCES_NAME, Activity.MODE_PRIVATE).edit();
+        this.preferences = getSharedPreferences(context);
     }
 
-    @Nullable
-    public String getAppId() {
-        return context.getSharedPreferences(GraftPlugin.SHARED_PREFERENCES_NAME, Activity.MODE_PRIVATE).getString(appIdKey, null);
-    }
-
-    @Nullable
-    public String getChannel() {
-        return context.getSharedPreferences(GraftPlugin.SHARED_PREFERENCES_NAME, Activity.MODE_PRIVATE).getString(channelKey, null);
-    }
-
-    @Nullable
-    public String getCustomId() {
-        return context.getSharedPreferences(GraftPlugin.SHARED_PREFERENCES_NAME, Activity.MODE_PRIVATE).getString(customIdKey, null);
-    }
-
-    @Nullable
-    public String getDeviceIdForApp(@Nullable String appId) {
-        if (appId == null) {
-            return context
-                .getSharedPreferences(GraftPlugin.SHARED_PREFERENCES_NAME, Activity.MODE_PRIVATE)
-                .getString(deviceIdKey, null);
-        } else {
-            return context
-                .getSharedPreferences(GraftPlugin.SHARED_PREFERENCES_NAME, Activity.MODE_PRIVATE)
-                .getString(deviceIdKey + "_" + appId, null);
-        }
-    }
-
-    @Nullable
-    public String getLastKnownGoodBundleId() {
-        return context
-            .getSharedPreferences(GraftPlugin.SHARED_PREFERENCES_NAME, Activity.MODE_PRIVATE)
-            .getString(lastKnownGoodBundleIdKey, null);
-    }
-
-    public int getLastVersionCode() {
-        return context.getSharedPreferences(GraftPlugin.SHARED_PREFERENCES_NAME, Activity.MODE_PRIVATE).getInt(lastVersionCodeKey, -1);
-    }
-
-    @Nullable
-    public String getPreviousBundleId() {
-        return context
-            .getSharedPreferences(GraftPlugin.SHARED_PREFERENCES_NAME, Activity.MODE_PRIVATE)
-            .getString(previousBundleIdKey, null);
+    @NonNull
+    static SharedPreferences getSharedPreferences(@NonNull Context context) {
+        return context.getSharedPreferences(GraftPlugin.SHARED_PREFERENCES_NAME, Activity.MODE_PRIVATE);
     }
 
     @Nullable
     public String getBlockedBundleIds() {
-        return context
-            .getSharedPreferences(GraftPlugin.SHARED_PREFERENCES_NAME, Activity.MODE_PRIVATE)
-            .getString(blockedBundleIdsKey, null);
+        return preferences.getString(BLOCKED_BUNDLE_IDS_KEY, null);
     }
 
-    public void setAppId(@Nullable String appId) {
-        if (appId == null) {
-            settingsEditor.remove(appIdKey);
-        } else {
-            settingsEditor.putString(appIdKey, appId);
+    @Nullable
+    public String getChannel() {
+        return preferences.getString(CHANNEL_KEY, null);
+    }
+
+    public long getHighestInstalledCounter() {
+        return preferences.getLong(HIGHEST_INSTALLED_COUNTER_KEY, 0);
+    }
+
+    /**
+     * @return A random identifier, created on first use, that fixes this install's rollout bucket.
+     */
+    @NonNull
+    public String getInstallId() {
+        String installId = preferences.getString(INSTALL_ID_KEY, null);
+        if (installId == null) {
+            installId = UUID.randomUUID().toString().toLowerCase();
+            preferences.edit().putString(INSTALL_ID_KEY, installId).apply();
         }
-        settingsEditor.apply();
+        return installId;
+    }
+
+    @Nullable
+    public String getLastKnownGoodBundleId() {
+        return preferences.getString(LAST_KNOWN_GOOD_BUNDLE_ID_KEY, null);
+    }
+
+    @Nullable
+    public String getPreviousBundleId() {
+        return preferences.getString(PREVIOUS_BUNDLE_ID_KEY, null);
     }
 
     public void setBlockedBundleIds(@Nullable String blockedBundleIds) {
-        if (blockedBundleIds == null) {
-            settingsEditor.remove(blockedBundleIdsKey);
-        } else {
-            settingsEditor.putString(blockedBundleIdsKey, blockedBundleIds);
-        }
-        settingsEditor.apply();
+        putString(BLOCKED_BUNDLE_IDS_KEY, blockedBundleIds);
     }
 
     public void setChannel(@Nullable String channel) {
-        if (channel == null) {
-            settingsEditor.remove(channelKey);
-        } else {
-            settingsEditor.putString(channelKey, channel);
-        }
-        settingsEditor.apply();
+        putString(CHANNEL_KEY, channel);
     }
 
-    public void setCustomId(@Nullable String customId) {
-        if (customId == null) {
-            settingsEditor.remove(customIdKey);
-        } else {
-            settingsEditor.putString(customIdKey, customId);
-        }
-        settingsEditor.apply();
-    }
-
-    public void setDeviceIdForApp(@Nullable String appId, @NonNull String deviceId) {
-        if (appId == null) {
-            settingsEditor.putString(deviceIdKey, deviceId);
-        } else {
-            settingsEditor.putString(deviceIdKey + "_" + appId, deviceId);
-        }
-        settingsEditor.apply();
+    public void setHighestInstalledCounter(long counter) {
+        preferences.edit().putLong(HIGHEST_INSTALLED_COUNTER_KEY, counter).apply();
     }
 
     public void setLastKnownGoodBundleId(@Nullable String bundleId) {
-        if (bundleId == null) {
-            settingsEditor.remove(lastKnownGoodBundleIdKey);
-        } else {
-            settingsEditor.putString(lastKnownGoodBundleIdKey, bundleId);
-        }
-        settingsEditor.apply();
-    }
-
-    public void setLastVersionCode(int versionCode) {
-        settingsEditor.putInt(lastVersionCodeKey, versionCode);
-        settingsEditor.apply();
+        putString(LAST_KNOWN_GOOD_BUNDLE_ID_KEY, bundleId);
     }
 
     public void setPreviousBundleId(@Nullable String bundleId) {
-        if (bundleId == null) {
-            settingsEditor.remove(previousBundleIdKey);
+        putString(PREVIOUS_BUNDLE_ID_KEY, bundleId);
+    }
+
+    private void putString(@NonNull String key, @Nullable String value) {
+        SharedPreferences.Editor editor = preferences.edit();
+        if (value == null) {
+            editor.remove(key);
         } else {
-            settingsEditor.putString(previousBundleIdKey, bundleId);
+            editor.putString(key, value);
         }
-        settingsEditor.apply();
+        editor.apply();
     }
 }

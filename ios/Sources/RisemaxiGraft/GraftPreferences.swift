@@ -1,18 +1,13 @@
 import Foundation
 
 public class GraftPreferences: NSObject {
-    private let appIdKey = "appId" // DO NOT CHANGE
-    private let blockedBundleIdsKey = "blockedBundleIds" // DO NOT CHANGE
-    private let channelKey = "channel" // DO NOT CHANGE
-    private let customIdKey = "customId" // DO NOT CHANGE
-    private let lastKnownGoodBundleIdKey = "lastKnownGoodBundleId" // DO NOT CHANGE
-    private let lastVersionCodeKey = "lastVersionCode" // DO NOT CHANGE
-    private let lastVersionNameKey = "lastVersionName" // DO NOT CHANGE
-    private let previousBundleIdKey = "previousBundleIdKey" // DO NOT CHANGE
-
-    public func getAppId() -> String? {
-        return UserDefaults.standard.string(forKey: applyPrefix(to: appIdKey))
-    }
+    private let blockedBundleIdsKey = "blockedBundleIds"
+    private let channelKey = "channel"
+    private let highestInstalledCounterKey = "highestInstalledCounter"
+    private let installIdKey = "installId"
+    private let lastKnownGoodBundleIdKey = "lastKnownGoodBundleId"
+    private let lastNativeBuildKey = "lastNativeBuild"
+    private let previousBundleIdKey = "previousBundleId"
 
     public func getBlockedBundleIds() -> String? {
         return UserDefaults.standard.string(forKey: applyPrefix(to: blockedBundleIdsKey))
@@ -22,92 +17,64 @@ public class GraftPreferences: NSObject {
         return UserDefaults.standard.string(forKey: applyPrefix(to: channelKey))
     }
 
-    public func getCustomId() -> String? {
-        return UserDefaults.standard.string(forKey: applyPrefix(to: customIdKey))
+    public func getHighestInstalledCounter() -> Int {
+        return UserDefaults.standard.integer(forKey: applyPrefix(to: highestInstalledCounterKey))
+    }
+
+    /// A random identifier, created on first use, that fixes this install's rollout bucket.
+    public func getInstallId() -> String {
+        let key = applyPrefix(to: installIdKey)
+        if let installId = UserDefaults.standard.string(forKey: key) {
+            return installId
+        }
+        let installId = UUID().uuidString.lowercased()
+        UserDefaults.standard.set(installId, forKey: key)
+        return installId
     }
 
     public func getLastKnownGoodBundleId() -> String? {
         return UserDefaults.standard.string(forKey: applyPrefix(to: lastKnownGoodBundleIdKey))
     }
 
-    public func getLastVersionCode() -> String? {
-        return UserDefaults.standard.string(forKey: applyPrefix(to: lastVersionCodeKey))
-    }
-
-    public func getLastVersionName() -> String? {
-        return UserDefaults.standard.string(forKey: applyPrefix(to: lastVersionNameKey))
+    /// - Returns: The build the pointer was last reconciled against, or `nil` on a fresh install.
+    public func getLastNativeBuild() -> Int? {
+        return UserDefaults.standard.object(forKey: applyPrefix(to: lastNativeBuildKey)) as? Int
     }
 
     public func getPreviousBundleId() -> String? {
         return UserDefaults.standard.string(forKey: applyPrefix(to: previousBundleIdKey))
     }
 
-    public func setAppId(_ value: String?) {
-        if let value = value {
-            UserDefaults.standard.set(value, forKey: applyPrefix(to: appIdKey))
-        } else {
-            UserDefaults.standard.removeObject(forKey: applyPrefix(to: appIdKey))
-        }
-        UserDefaults.standard.synchronize()
-    }
-
     public func setBlockedBundleIds(_ value: String?) {
-        if let value = value {
-            UserDefaults.standard.set(value, forKey: applyPrefix(to: blockedBundleIdsKey))
-        } else {
-            UserDefaults.standard.removeObject(forKey: applyPrefix(to: blockedBundleIdsKey))
-        }
-        UserDefaults.standard.synchronize()
+        setString(value, forKey: blockedBundleIdsKey)
     }
 
     public func setChannel(_ value: String?) {
-        if let value = value {
-            UserDefaults.standard.set(value, forKey: applyPrefix(to: channelKey))
-        } else {
-            UserDefaults.standard.removeObject(forKey: applyPrefix(to: channelKey))
-        }
-        UserDefaults.standard.synchronize()
+        setString(value, forKey: channelKey)
     }
 
-    public func setCustomId(_ value: String) {
-        UserDefaults.standard.set(value, forKey: applyPrefix(to: customIdKey))
-        UserDefaults.standard.synchronize()
+    public func setHighestInstalledCounter(_ value: Int) {
+        UserDefaults.standard.set(value, forKey: applyPrefix(to: highestInstalledCounterKey))
     }
 
     public func setLastKnownGoodBundleId(_ value: String?) {
-        if let value = value {
-            UserDefaults.standard.set(value, forKey: applyPrefix(to: lastKnownGoodBundleIdKey))
-        } else {
-            UserDefaults.standard.removeObject(forKey: applyPrefix(to: lastKnownGoodBundleIdKey))
-        }
-        UserDefaults.standard.synchronize()
+        setString(value, forKey: lastKnownGoodBundleIdKey)
     }
 
-    public func setLastVersionCode(_ value: String?) {
-        if let value = value {
-            UserDefaults.standard.set(value, forKey: applyPrefix(to: lastVersionCodeKey))
-        } else {
-            UserDefaults.standard.removeObject(forKey: applyPrefix(to: lastVersionCodeKey))
-        }
-        UserDefaults.standard.synchronize()
-    }
-
-    public func setLastVersionName(_ value: String?) {
-        if let value = value {
-            UserDefaults.standard.set(value, forKey: applyPrefix(to: lastVersionNameKey))
-        } else {
-            UserDefaults.standard.removeObject(forKey: applyPrefix(to: lastVersionNameKey))
-        }
-        UserDefaults.standard.synchronize()
+    public func setLastNativeBuild(_ value: Int) {
+        UserDefaults.standard.set(value, forKey: applyPrefix(to: lastNativeBuildKey))
     }
 
     public func setPreviousBundleId(_ value: String?) {
+        setString(value, forKey: previousBundleIdKey)
+    }
+
+    private func setString(_ value: String?, forKey key: String) {
         if let value = value {
-            UserDefaults.standard.set(value, forKey: applyPrefix(to: previousBundleIdKey))
+            UserDefaults.standard.set(value, forKey: applyPrefix(to: key))
         } else {
-            UserDefaults.standard.removeObject(forKey: applyPrefix(to: previousBundleIdKey))
+            UserDefaults.standard.removeObject(forKey: applyPrefix(to: key))
         }
-        UserDefaults.standard.synchronize()
     }
 
     private func applyPrefix(to key: String) -> String {

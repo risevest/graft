@@ -1,5 +1,4 @@
 public struct GraftConfig {
-    var appId: String?
     var autoBlockRolledBackBundles = true
     var autoDeleteBundles = true
     var autoUpdateStrategy = "none"
@@ -7,5 +6,5 @@ public struct GraftConfig {
     var httpTimeout = 60000
     var publicKey: String?
     var readyTimeout = 10000
-    var serverDomain = "api.cloud.capawesome.io"
+    var serverUrl: String?
 }

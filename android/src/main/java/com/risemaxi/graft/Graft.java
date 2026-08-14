@@ -2,7 +2,6 @@ package com.risemaxi.graft;
 
 import android.content.pm.PackageInfo;
 import android.content.pm.PackageManager;
-import android.content.res.AssetManager;
 import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
@@ -12,39 +11,28 @@ import androidx.annotation.Nullable;
 import androidx.core.content.pm.PackageInfoCompat;
 import com.getcapacitor.Bridge;
 import com.getcapacitor.Logger;
+import com.risemaxi.graft.classes.ChannelDocument;
+import com.risemaxi.graft.classes.ChannelRelease;
 import com.risemaxi.graft.classes.Manifest;
-import com.risemaxi.graft.classes.ManifestItem;
-import com.risemaxi.graft.classes.api.GetChannelsResponseItem;
-import com.risemaxi.graft.classes.api.GetLatestBundleResponse;
+import com.risemaxi.graft.classes.ManifestFile;
 import com.risemaxi.graft.classes.events.DownloadBundleProgressEvent;
 import com.risemaxi.graft.classes.events.NextBundleSetEvent;
 import com.risemaxi.graft.classes.options.DeleteBundleOptions;
 import com.risemaxi.graft.classes.options.DownloadBundleOptions;
-import com.risemaxi.graft.classes.options.FetchChannelsOptions;
-import com.risemaxi.graft.classes.options.FetchLatestBundleOptions;
 import com.risemaxi.graft.classes.options.SetChannelOptions;
-import com.risemaxi.graft.classes.options.SetConfigOptions;
-import com.risemaxi.graft.classes.options.SetCustomIdOptions;
 import com.risemaxi.graft.classes.options.SetNextBundleOptions;
 import com.risemaxi.graft.classes.options.SyncOptions;
-import com.risemaxi.graft.classes.results.ChannelResult;
-import com.risemaxi.graft.classes.results.FetchChannelsResult;
-import com.risemaxi.graft.classes.results.FetchLatestBundleResult;
 import com.risemaxi.graft.classes.results.GetBlockedBundlesResult;
-import com.risemaxi.graft.classes.results.GetBundlesResult;
 import com.risemaxi.graft.classes.results.GetChannelResult;
-import com.risemaxi.graft.classes.results.GetConfigResult;
 import com.risemaxi.graft.classes.results.GetCurrentBundleResult;
-import com.risemaxi.graft.classes.results.GetCustomIdResult;
-import com.risemaxi.graft.classes.results.GetDeviceIdResult;
 import com.risemaxi.graft.classes.results.GetDownloadedBundlesResult;
+import com.risemaxi.graft.classes.results.GetInstallIdResult;
 import com.risemaxi.graft.classes.results.GetNextBundleResult;
 import com.risemaxi.graft.classes.results.GetVersionCodeResult;
 import com.risemaxi.graft.classes.results.GetVersionNameResult;
 import com.risemaxi.graft.classes.results.IsSyncingResult;
 import com.risemaxi.graft.classes.results.ReadyResult;
 import com.risemaxi.graft.classes.results.SyncResult;
-import com.risemaxi.graft.enums.ArtifactType;
 import com.risemaxi.graft.interfaces.DownloadProgressCallback;
 import com.risemaxi.graft.interfaces.EmptyCallback;
 import com.risemaxi.graft.interfaces.NonEmptyCallback;
@@ -54,6 +42,7 @@ import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
 import java.security.KeyFactory;
 import java.security.MessageDigest;
 import java.security.PublicKey;
@@ -61,10 +50,13 @@ import java.security.Signature;
 import java.security.spec.X509EncodedKeySpec;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.HashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
-import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import net.lingala.zip4j.ZipFile;
@@ -72,11 +64,9 @@ import net.lingala.zip4j.model.FileHeader;
 import okhttp3.Call;
 import okhttp3.HttpUrl;
 import okhttp3.Response;
-import okhttp3.ResponseBody;
 import okio.Buffer;
 import okio.BufferedSource;
 import okio.Okio;
-import org.json.JSONArray;
 import org.json.JSONObject;
 
 public class Graft {
@@ -98,26 +88,19 @@ public class Graft {
     private final GraftPreferences preferences;
 
     private final Handler rollbackHandler = new Handler(Looper.getMainLooper());
-    private final String manifestFileName = "capawesome-graft-manifest.json"; // DO NOT CHANGE!
 
     private boolean initialPageLoaded = false;
     private long lastAutoUpdateCheckTimestamp = 0;
     private boolean rollbackPerformed = false;
     private boolean syncInProgress = false;
 
-    public Graft(@NonNull GraftConfig config, @NonNull GraftPlugin plugin) throws PackageManager.NameNotFoundException {
+    public Graft(@NonNull GraftConfig config, @NonNull GraftPlugin plugin) {
         this.config = config;
         this.httpClient = new GraftHttpClient(config);
         this.plugin = plugin;
         this.preferences = new GraftPreferences(plugin.getContext());
 
-        // Check version and reset config if version changed
-        checkAndResetConfigIfVersionChanged();
-
-        // Set the device ID on the HTTP client (after any potential config reset)
-        this.httpClient.setDeviceId(getDeviceId());
-
-        // Start the rollback timer to rollback to the default bundle
+        // Start the rollback timer to rollback to the last known good bundle
         // if the app is not ready after a certain time
         startRollbackTimer();
     }
@@ -130,8 +113,7 @@ public class Graft {
         String bundleId = options.getBundleId();
 
         if (!hasBundleById(bundleId)) {
-            Exception exception = new Exception(GraftPlugin.ERROR_BUNDLE_NOT_FOUND);
-            callback.error(exception);
+            callback.error(new Exception(GraftPlugin.ERROR_BUNDLE_NOT_FOUND));
             return;
         }
         deleteBundleById(bundleId);
@@ -140,111 +122,40 @@ public class Graft {
     }
 
     public void downloadBundle(@NonNull DownloadBundleOptions options, @NonNull EmptyCallback callback) {
-        ArtifactType artifactType = options.getArtifactType();
         String bundleId = options.getBundleId();
-        String checksum = options.getChecksum();
-        String signature = options.getSignature();
-        String url = options.getUrl();
 
-        // Check if the bundle already exists
         if (hasBundleById(bundleId)) {
-            Exception exception = new Exception(GraftPlugin.ERROR_BUNDLE_EXISTS);
-            callback.error(exception);
+            callback.error(new Exception(GraftPlugin.ERROR_BUNDLE_EXISTS));
             return;
         }
 
-        // Download the bundle
-        if (artifactType == ArtifactType.MANIFEST) {
-            downloadBundleOfTypeManifest(bundleId, url, callback);
-        } else {
-            downloadBundleOfTypeZip(bundleId, checksum, signature, url, callback);
-        }
-    }
-
-    public void fetchChannels(@NonNull FetchChannelsOptions options, @NonNull NonEmptyCallback<FetchChannelsResult> callback) {
-        try {
-            HttpUrl.Builder urlBuilder = new HttpUrl.Builder()
-                .scheme("https")
-                .host(config.getServerDomain())
-                .addPathSegment("v1")
-                .addPathSegment("apps")
-                .addPathSegment(getAppId())
-                .addPathSegment("channels");
-            if (options.getLimit() != null) {
-                urlBuilder.addQueryParameter("limit", String.valueOf(options.getLimit()));
-            }
-            if (options.getOffset() != null) {
-                urlBuilder.addQueryParameter("offset", String.valueOf(options.getOffset()));
-            }
-            if (options.getQuery() != null) {
-                urlBuilder.addQueryParameter("query", options.getQuery());
-            }
-            String url = urlBuilder.build().toString();
-
-            httpClient.enqueue(
-                url,
-                new NonEmptyCallback<Response>() {
-                    @Override
-                    public void success(@NonNull Response response) {
-                        try {
-                            String responseBodyString = response.body().string();
-                            if (response.isSuccessful()) {
-                                JSONArray responseJsonArray = new JSONArray(responseBodyString);
-                                ChannelResult[] channels = new ChannelResult[responseJsonArray.length()];
-                                for (int i = 0; i < responseJsonArray.length(); i++) {
-                                    GetChannelsResponseItem item = new GetChannelsResponseItem(responseJsonArray.getJSONObject(i));
-                                    channels[i] = new ChannelResult(item.getId(), item.getName());
-                                }
-                                FetchChannelsResult result = new FetchChannelsResult(channels);
-                                callback.success(result);
-                            } else if (response.code() == 401) {
-                                callback.error(new Exception("Unauthorized. Channel Discovery may not be enabled for this app."));
-                            } else {
-                                callback.error(new Exception(responseBodyString));
-                            }
-                        } catch (Exception e) {
-                            callback.error(e);
-                        }
-                    }
-
-                    @Override
-                    public void error(@NonNull Exception exception) {
-                        callback.error(exception);
-                    }
-                }
-            );
-        } catch (Exception e) {
-            callback.error(e);
-        }
-    }
-
-    public void fetchLatestBundle(@NonNull FetchLatestBundleOptions options, @NonNull NonEmptyCallback<FetchLatestBundleResult> callback) {
-        fetchLatestBundleInternal(
-            options,
-            new NonEmptyCallback<GetLatestBundleResponse>() {
+        File file = new File(plugin.getContext().getCacheDir(), UUID.randomUUID().toString() + ".zip");
+        downloadFile(
+            options.getUrl(),
+            file,
+            (downloadedBytes, totalBytes) -> notifyDownloadBundleProgressListeners(bundleId, downloadedBytes, totalBytes),
+            new EmptyCallback() {
                 @Override
-                public void success(@Nullable GetLatestBundleResponse response) {
-                    ArtifactType artifactType = response == null ? null : response.getArtifactType();
-                    String bundleId = response == null ? null : response.getBundleId();
-                    String channel = response == null ? null : response.getChannelName();
-                    String checksum = response == null ? null : response.getChecksum();
-                    JSONObject customProperties = response == null ? null : response.getCustomProperties();
-                    String downloadUrl = response == null ? null : response.getUrl();
-                    String signature = response == null ? null : response.getSignature();
-                    FetchLatestBundleResult result = new FetchLatestBundleResult(
-                        artifactType,
-                        bundleId,
-                        channel,
-                        checksum,
-                        customProperties,
-                        downloadUrl,
-                        signature
-                    );
-                    callback.success(result);
+                public void success() {
+                    try {
+                        verifyChecksum(file, options.getChecksum());
+                        File directory = unzipFile(file);
+                        File indexHtmlFile = searchIndexHtmlFile(directory);
+                        if (indexHtmlFile == null) {
+                            throw new Exception(GraftPlugin.ERROR_BUNDLE_INDEX_HTML_MISSING);
+                        }
+                        moveBundleIntoPlace(indexHtmlFile.getParentFile(), bundleId);
+                        callback.success();
+                    } catch (Exception exception) {
+                        callback.error(exception);
+                    } finally {
+                        file.delete();
+                    }
                 }
 
                 @Override
                 public void error(@NonNull Exception exception) {
+                    file.delete();
                     callback.error(exception);
                 }
             }
@@ -252,81 +163,41 @@ public class Graft {
     }
 
     public void getBlockedBundles(@NonNull NonEmptyCallback<GetBlockedBundlesResult> callback) {
-        String blockedIds = preferences.getBlockedBundleIds();
-        String[] bundleIds;
-        if (blockedIds == null || blockedIds.isEmpty()) {
-            bundleIds = new String[0];
-        } else {
-            bundleIds = blockedIds.split(",");
-        }
-        GetBlockedBundlesResult result = new GetBlockedBundlesResult(bundleIds);
-        callback.success(result);
+        Set<String> bundleIds = getBlockedBundleIds();
+        callback.success(new GetBlockedBundlesResult(bundleIds.toArray(new String[0])));
     }
 
-    public void getBundles(@NonNull NonEmptyCallback callback) {
-        String[] bundleIds = getDownloadedBundleIds();
-        GetBundlesResult result = new GetBundlesResult(bundleIds);
-        callback.success(result);
-    }
-
-    public void getDownloadedBundles(@NonNull NonEmptyCallback<GetDownloadedBundlesResult> callback) {
-        String[] bundleIds = getDownloadedBundleIds();
-        GetDownloadedBundlesResult result = new GetDownloadedBundlesResult(bundleIds);
-        callback.success(result);
-    }
-
-    public void getChannel(@NonNull NonEmptyCallback callback) {
-        String channel = getChannel();
-        GetChannelResult result = new GetChannelResult(channel);
-        callback.success(result);
-    }
-
-    public void getConfig(@NonNull NonEmptyCallback<GetConfigResult> callback) {
-        String appId = getAppId();
-        String autoUpdateStrategy = config.getAutoUpdateStrategy();
-        GetConfigResult result = new GetConfigResult(appId, autoUpdateStrategy);
-        callback.success(result);
+    public void getChannel(@NonNull NonEmptyCallback<GetChannelResult> callback) {
+        callback.success(new GetChannelResult(getChannel()));
     }
 
     public void getCurrentBundle(@NonNull NonEmptyCallback<GetCurrentBundleResult> callback) {
-        String bundleId = getCurrentBundleId();
-        GetCurrentBundleResult result = new GetCurrentBundleResult(bundleId);
-        callback.success(result);
+        callback.success(new GetCurrentBundleResult(getCurrentBundleId()));
     }
 
-    public void getCustomId(@NonNull NonEmptyCallback callback) {
-        String customId = preferences.getCustomId();
-        GetCustomIdResult result = new GetCustomIdResult(customId);
-        callback.success(result);
+    public void getDownloadedBundles(@NonNull NonEmptyCallback<GetDownloadedBundlesResult> callback) {
+        callback.success(new GetDownloadedBundlesResult(getDownloadedBundleIds()));
     }
 
-    public void getDeviceId(@NonNull NonEmptyCallback callback) {
-        String deviceId = getDeviceId();
-        GetDeviceIdResult result = new GetDeviceIdResult(deviceId);
-        callback.success(result);
+    public void getInstallId(@NonNull NonEmptyCallback<GetInstallIdResult> callback) {
+        String installId = preferences.getInstallId();
+        callback.success(new GetInstallIdResult(installId, ReleaseSelector.bucketFor(installId)));
     }
 
     public void getNextBundle(@NonNull NonEmptyCallback<GetNextBundleResult> callback) {
-        String bundleId = getNextBundleId();
-        GetNextBundleResult result = new GetNextBundleResult(bundleId);
-        callback.success(result);
+        callback.success(new GetNextBundleResult(getNextBundleId()));
     }
 
-    public void getVersionCode(@NonNull NonEmptyCallback callback) throws PackageManager.NameNotFoundException {
-        String versionCode = getVersionCodeAsString();
-        GetVersionCodeResult result = new GetVersionCodeResult(versionCode);
-        callback.success(result);
+    public void getVersionCode(@NonNull NonEmptyCallback<GetVersionCodeResult> callback) throws PackageManager.NameNotFoundException {
+        callback.success(new GetVersionCodeResult(String.valueOf(getNativeBuild())));
     }
 
-    public void getVersionName(@NonNull NonEmptyCallback callback) throws PackageManager.NameNotFoundException {
-        String versionName = getVersionName();
-        GetVersionNameResult result = new GetVersionNameResult(versionName);
-        callback.success(result);
+    public void getVersionName(@NonNull NonEmptyCallback<GetVersionNameResult> callback) throws PackageManager.NameNotFoundException {
+        callback.success(new GetVersionNameResult(getPackageInfo().versionName));
     }
 
     public void isSyncing(@NonNull NonEmptyCallback<IsSyncingResult> callback) {
-        IsSyncingResult result = new IsSyncingResult(syncInProgress);
-        callback.success(result);
+        callback.success(new IsSyncingResult(syncInProgress));
     }
 
     public void handleOnPageLoaded() {
@@ -344,7 +215,7 @@ public class Graft {
         }
     }
 
-    public void ready(@NonNull NonEmptyCallback callback) {
+    public void ready(@NonNull NonEmptyCallback<ReadyResult> callback) {
         Logger.debug(GraftPlugin.TAG, "App is ready.");
         if (config.getReadyTimeout() <= 0) {
             Logger.warn(GraftPlugin.TAG, "Ready timeout is set to 0. Automatic rollback is disabled.");
@@ -357,16 +228,15 @@ public class Graft {
         }
         // Get the current and previous bundle IDs
         String currentBundleId = getCurrentBundleId();
-        String previousBundleId = getPreviousBundleId();
+        String previousBundleId = preferences.getPreviousBundleId();
         // Block the rolled back bundle if enabled
         if (config.getAutoBlockRolledBackBundles() && rollbackPerformed && previousBundleId != null) {
             addBlockedBundleId(previousBundleId);
         }
         // Return the result
-        ReadyResult result = new ReadyResult(currentBundleId, previousBundleId, rollbackPerformed);
-        callback.success(result);
+        callback.success(new ReadyResult(currentBundleId, previousBundleId, rollbackPerformed));
         // Set the new previous bundle ID
-        setPreviousBundleId(currentBundleId);
+        preferences.setPreviousBundleId(currentBundleId);
         // A bundle that reaches this point booted, so it is the one to roll back to next time
         if (!rollbackPerformed) {
             preferences.setLastKnownGoodBundleId(currentBundleId);
@@ -384,26 +254,8 @@ public class Graft {
         setNextBundleById(null);
     }
 
-    public void resetConfig() {
-        preferences.setAppId(null);
-    }
-
     public void setChannel(@NonNull SetChannelOptions options, @NonNull EmptyCallback callback) {
-        String channel = options.getChannel();
-
-        preferences.setChannel(channel);
-        callback.success();
-    }
-
-    public void setConfig(@NonNull SetConfigOptions options) {
-        String appId = options.getAppId();
-        preferences.setAppId(appId);
-    }
-
-    public void setCustomId(@NonNull SetCustomIdOptions options, @NonNull EmptyCallback callback) {
-        String customId = options.getCustomId();
-
-        preferences.setCustomId(customId);
+        preferences.setChannel(options.getChannel());
         callback.success();
     }
 
@@ -412,254 +264,466 @@ public class Graft {
 
         if (bundleId == null) {
             reset();
+        } else if (hasBundleById(bundleId)) {
+            setNextBundleById(bundleId);
         } else {
-            if (hasBundleById(bundleId)) {
-                setNextBundleById(bundleId);
-            } else {
-                Exception exception = new Exception(GraftPlugin.ERROR_BUNDLE_NOT_FOUND);
-                callback.error(exception);
-                return;
-            }
+            callback.error(new Exception(GraftPlugin.ERROR_BUNDLE_NOT_FOUND));
+            return;
         }
         callback.success();
     }
 
     public void sync(@NonNull SyncOptions options, @NonNull NonEmptyCallback<Result> callback) {
         if (syncInProgress) {
-            Exception exception = new Exception(GraftPlugin.ERROR_SYNC_IN_PROGRESS);
-            callback.error(exception);
+            callback.error(new Exception(GraftPlugin.ERROR_SYNC_IN_PROGRESS));
             return;
         }
         syncInProgress = true;
 
-        String channel = options.getChannel();
-        // Fetch the latest bundle
-        FetchLatestBundleOptions fetchLatestBundleOptions = new FetchLatestBundleOptions(channel);
-        fetchLatestBundleInternal(
-            fetchLatestBundleOptions,
-            new NonEmptyCallback<GetLatestBundleResponse>() {
+        NonEmptyCallback<Result> completion = new NonEmptyCallback<>() {
+            @Override
+            public void success(@NonNull Result result) {
+                syncInProgress = false;
+                callback.success(result);
+            }
+
+            @Override
+            public void error(@NonNull Exception exception) {
+                syncInProgress = false;
+                callback.error(exception);
+            }
+        };
+
+        try {
+            String channel = options.getChannel() == null ? getChannel() : options.getChannel();
+            if (channel == null) {
+                throw new Exception(GraftPlugin.ERROR_CHANNEL_MISSING);
+            }
+            PublicKey publicKey = loadPublicKey();
+            HttpUrl channelUrl = buildChannelUrl(channel);
+            Logger.debug(GraftPlugin.TAG, "Reading channel document: " + channelUrl);
+
+            httpClient.enqueue(
+                channelUrl.toString(),
+                new NonEmptyCallback<Response>() {
+                    @Override
+                    public void success(@NonNull Response response) {
+                        try {
+                            String body = readBody(response);
+                            ChannelDocument document = new ChannelDocument(new JSONObject(body));
+                            if (document.isKillSwitchEnabled()) {
+                                Logger.warn(GraftPlugin.TAG, "Kill switch is enabled. Reverting to the embedded bundle.");
+                                setNextBundleById(null);
+                                completion.success(new SyncResult(null));
+                                return;
+                            }
+                            ChannelRelease release = ReleaseSelector.select(
+                                document.getReleases(),
+                                getNativeBuild(),
+                                preferences.getHighestInstalledCounter(),
+                                ReleaseSelector.bucketFor(preferences.getInstallId()),
+                                getBlockedBundleIds()
+                            );
+                            if (release == null) {
+                                Logger.debug(GraftPlugin.TAG, "No update available.");
+                                completion.success(new SyncResult(null));
+                                return;
+                            }
+                            if (hasBundleById(release.getId())) {
+                                stageRelease(release.getId(), release.getCounter());
+                                completion.success(new SyncResult(release.getId()));
+                                return;
+                            }
+                            installRelease(channelUrl, release, channel, publicKey, completion);
+                        } catch (Exception exception) {
+                            completion.error(exception);
+                        }
+                    }
+
+                    @Override
+                    public void error(@NonNull Exception exception) {
+                        completion.error(exception);
+                    }
+                }
+            );
+        } catch (Exception exception) {
+            completion.error(exception);
+        }
+    }
+
+    private void installRelease(
+        @NonNull HttpUrl channelUrl,
+        @NonNull ChannelRelease release,
+        @NonNull String channel,
+        @NonNull PublicKey publicKey,
+        @NonNull NonEmptyCallback<Result> completion
+    ) throws Exception {
+        HttpUrl manifestUrl = resolveManifestUrl(channelUrl, release.getManifest());
+        Logger.debug(GraftPlugin.TAG, "Reading manifest: " + manifestUrl);
+
+        httpClient.enqueue(
+            manifestUrl.toString(),
+            new NonEmptyCallback<Response>() {
                 @Override
-                public void success(@Nullable GetLatestBundleResponse response) {
+                public void success(@NonNull Response response) {
                     try {
-                        if (response == null) {
-                            Logger.debug(GraftPlugin.TAG, "No update available.");
-                            syncInProgress = false;
-                            SyncResult syncResult = new SyncResult(null);
-                            callback.success(syncResult);
-                            return;
-                        }
-                        ArtifactType artifactType = response.getArtifactType();
-                        String latestBundleId = response.getBundleId();
-                        String checksum = response.getChecksum();
-                        String signature = response.getSignature();
-                        String url = response.getUrl();
-                        // Check if the bundle is blocked
-                        if (isBlockedBundleId(latestBundleId)) {
-                            Logger.warn(GraftPlugin.TAG, "Bundle is blocked and will not be downloaded.");
-                            syncInProgress = false;
-                            SyncResult syncResult = new SyncResult(null);
-                            callback.success(syncResult);
-                            return;
-                        }
-                        // Check if the bundle already exists
-                        if (hasBundleById(latestBundleId)) {
-                            String nextBundleId = null;
-                            String currentBundleId = getCurrentBundleId();
-                            if (!latestBundleId.equals(currentBundleId)) {
-                                // Set the next bundle
-                                setNextBundleById(latestBundleId);
-                                nextBundleId = latestBundleId;
-                            }
-                            syncInProgress = false;
-                            SyncResult syncResult = new SyncResult(nextBundleId);
-                            callback.success(syncResult);
-                            return;
-                        }
-
-                        // Download the bundle
-                        EmptyCallback downloadCallback = new EmptyCallback() {
-                            @Override
-                            public void success() {
-                                try {
-                                    // Set the next bundle
-                                    setNextBundleById(latestBundleId);
-                                    syncInProgress = false;
-                                    SyncResult syncResult = new SyncResult(latestBundleId);
-                                    callback.success(syncResult);
-                                } catch (Exception e) {
-                                    syncInProgress = false;
-                                    callback.error(e);
-                                }
-                            }
-
-                            @Override
-                            public void error(@NonNull Exception exception) {
-                                syncInProgress = false;
-                                callback.error(exception);
-                            }
-                        };
-
-                        if (artifactType == ArtifactType.MANIFEST) {
-                            downloadBundleOfTypeManifest(latestBundleId, url, downloadCallback);
-                        } else {
-                            downloadBundleOfTypeZip(latestBundleId, checksum, signature, url, downloadCallback);
-                        }
-                    } catch (Exception e) {
-                        syncInProgress = false;
-                        callback.error(e);
+                        byte[] manifestBytes = readBodyAsBytes(response);
+                        // The signature covers these exact bytes, so nothing is parsed before it is verified
+                        verifySignature(manifestBytes, release.getSignature(), publicKey);
+                        Manifest manifest = new Manifest(new JSONObject(new String(manifestBytes, StandardCharsets.UTF_8)));
+                        verifyManifestIsAcceptable(manifest, release, channel);
+                        installManifest(manifestUrl, manifest, manifestBytes, completion);
+                    } catch (Exception exception) {
+                        completion.error(exception);
                     }
                 }
 
                 @Override
                 public void error(@NonNull Exception exception) {
-                    syncInProgress = false;
-                    callback.error(exception);
+                    completion.error(exception);
                 }
             }
         );
     }
 
-    private void addBundle(@NonNull String bundleId, @NonNull File sourceDirectory) throws Exception {
-        // Search folder with index.html file
-        File indexHtmlFile = searchIndexHtmlFile(sourceDirectory);
-        if (indexHtmlFile == null) {
-            throw new Exception(GraftPlugin.ERROR_BUNDLE_INDEX_HTML_MISSING);
+    private void installManifest(
+        @NonNull HttpUrl manifestUrl,
+        @NonNull Manifest manifest,
+        @NonNull byte[] manifestBytes,
+        @NonNull NonEmptyCallback<Result> completion
+    ) throws Exception {
+        File directory = new File(plugin.getContext().getCacheDir(), UUID.randomUUID().toString());
+        if (!directory.mkdirs()) {
+            throw new Exception(GraftPlugin.ERROR_INSTALL_FAILED);
         }
 
-        // Create the bundles directory if it does not exist
-        createBundlesDirectory();
+        Map<String, String> currentHrefBySha256 = loadCurrentHrefBySha256();
+        List<ManifestFile> filesToDownload = new ArrayList<>();
+        for (ManifestFile file : manifest.getFiles()) {
+            String currentHref = currentHrefBySha256.get(file.getSha256());
+            if (currentHref == null || !copyCurrentBundleFile(currentHref, file, directory)) {
+                filesToDownload.add(file);
+            }
+        }
 
-        // Move the bundle directory to the bundles directory
-        File bundleDirectory = buildBundleDirectoryFor(bundleId);
-        indexHtmlFile.getParentFile().renameTo(bundleDirectory);
+        downloadBundleFiles(
+            manifestUrl,
+            filesToDownload,
+            directory,
+            (downloadedBytes, totalBytes) -> notifyDownloadBundleProgressListeners(manifest.getId(), downloadedBytes, totalBytes),
+            new EmptyCallback() {
+                @Override
+                public void success() {
+                    try {
+                        if (!new File(directory, GraftPointer.INDEX_FILE_NAME).exists()) {
+                            throw new Exception(GraftPlugin.ERROR_BUNDLE_INDEX_HTML_MISSING);
+                        }
+                        // Written last so the verified file set is exactly what the manifest describes
+                        writeFile(new File(directory, GraftPointer.MANIFEST_FILE_NAME), manifestBytes);
+                        moveBundleIntoPlace(directory, manifest.getId());
+                        stageRelease(manifest.getId(), manifest.getCounter());
+                        completion.success(new SyncResult(manifest.getId()));
+                    } catch (Exception exception) {
+                        deleteFileRecursively(directory);
+                        completion.error(exception);
+                    }
+                }
+
+                @Override
+                public void error(@NonNull Exception exception) {
+                    deleteFileRecursively(directory);
+                    completion.error(exception);
+                }
+            }
+        );
     }
 
-    private void addBundleOfTypeManifest(@NonNull String bundleId, @NonNull File directory) throws Exception {
-        addBundle(bundleId, directory);
+    /**
+     * Records the release as installed before it is staged, so a bundle that never boots still raises
+     * the downgrade floor and the device can only ever move forward.
+     */
+    private void stageRelease(@NonNull String bundleId, long counter) {
+        if (counter > preferences.getHighestInstalledCounter()) {
+            preferences.setHighestInstalledCounter(counter);
+        }
+        if (!bundleId.equals(getCurrentBundleId())) {
+            setNextBundleById(bundleId);
+        }
     }
 
-    private void addBundleOfTypeZip(@NonNull String bundleId, @NonNull File zipFile) throws Exception {
-        // Unzip the file to the bundle directory
-        File unzippedDirectory = unzipFile(zipFile);
-        // Add the bundle
-        addBundle(bundleId, unzippedDirectory);
+    private void verifyManifestIsAcceptable(@NonNull Manifest manifest, @NonNull ChannelRelease release, @NonNull String channel)
+        throws Exception {
+        if (
+            !manifest.getId().equals(release.getId()) ||
+            manifest.getCounter() != release.getCounter() ||
+            manifest.getMinNativeBuild() != release.getMinNativeBuild() ||
+            !manifest.getChannel().equals(channel)
+        ) {
+            throw new Exception(GraftPlugin.ERROR_MANIFEST_MISMATCH);
+        }
+        if (manifest.getMinNativeBuild() > getNativeBuild()) {
+            throw new Exception(GraftPlugin.ERROR_MANIFEST_MISMATCH);
+        }
+        if (manifest.getCounter() <= preferences.getHighestInstalledCounter()) {
+            throw new Exception(GraftPlugin.ERROR_MANIFEST_MISMATCH);
+        }
+        long now = System.currentTimeMillis() / 1000;
+        if (now < manifest.getNotBefore() || now >= manifest.getExpiresAt()) {
+            throw new Exception(GraftPlugin.ERROR_MANIFEST_EXPIRED);
+        }
     }
 
-    private File buildBundlesDirectory() {
-        return GraftPointer.buildBundlesDirectory(plugin.getContext());
+    @NonNull
+    private HttpUrl buildChannelUrl(@NonNull String channel) throws Exception {
+        HttpUrl serverUrl = parseServerUrl();
+        return serverUrl
+            .newBuilder()
+            .addPathSegment("v1")
+            .addPathSegment("channel")
+            .addPathSegment(channel + ".json")
+            .build();
     }
 
+    /**
+     * Confines the manifest to the configured origin. The signature already decides what may be
+     * installed; this keeps an edited channel document from pointing the device at another host.
+     */
+    @NonNull
+    private HttpUrl resolveManifestUrl(@NonNull HttpUrl channelUrl, @NonNull String manifest) throws Exception {
+        HttpUrl manifestUrl = channelUrl.resolve(manifest);
+        HttpUrl serverUrl = parseServerUrl();
+        if (
+            manifestUrl == null ||
+            !manifestUrl.scheme().equals(serverUrl.scheme()) ||
+            !manifestUrl.host().equals(serverUrl.host()) ||
+            manifestUrl.port() != serverUrl.port()
+        ) {
+            throw new Exception(GraftPlugin.ERROR_MANIFEST_URL_INVALID);
+        }
+        return manifestUrl;
+    }
+
+    @NonNull
+    private HttpUrl parseServerUrl() throws Exception {
+        String serverUrl = config.getServerUrl();
+        if (serverUrl == null) {
+            throw new Exception(GraftPlugin.ERROR_SERVER_URL_MISSING);
+        }
+        HttpUrl parsed = HttpUrl.parse(serverUrl);
+        if (parsed == null) {
+            throw new Exception(GraftPlugin.ERROR_SERVER_URL_INVALID);
+        }
+        return parsed;
+    }
+
+    @NonNull
+    private HttpUrl buildFileUrl(@NonNull HttpUrl manifestUrl, @NonNull String href) {
+        HttpUrl.Builder builder = manifestUrl.newBuilder().removePathSegment(manifestUrl.pathSize() - 1);
+        for (String segment : href.split("/")) {
+            builder.addPathSegment(segment);
+        }
+        return builder.build();
+    }
+
+    private void downloadBundleFiles(
+        @NonNull HttpUrl manifestUrl,
+        @NonNull List<ManifestFile> filesToDownload,
+        @NonNull File directory,
+        @NonNull DownloadProgressCallback progressCallback,
+        @NonNull EmptyCallback completionCallback
+    ) {
+        if (filesToDownload.isEmpty()) {
+            progressCallback.onProgress(0, 0);
+            completionCallback.success();
+            return;
+        }
+
+        long totalBytesToDownload = 0;
+        for (ManifestFile file : filesToDownload) {
+            totalBytesToDownload += file.getSize();
+        }
+        final long totalBytes = totalBytesToDownload;
+
+        AtomicLong completedBytes = new AtomicLong(0);
+        AtomicInteger remaining = new AtomicInteger(filesToDownload.size());
+        AtomicReference<Exception> firstError = new AtomicReference<>();
+        List<Call> calls = new ArrayList<>();
+
+        for (ManifestFile file : filesToDownload) {
+            File destination = new File(directory, file.getHref());
+            destination.getParentFile().mkdirs();
+            Call call = downloadFile(
+                buildFileUrl(manifestUrl, file.getHref()).toString(),
+                destination,
+                (downloadedBytes, ignored) -> progressCallback.onProgress(completedBytes.get() + downloadedBytes, totalBytes),
+                new EmptyCallback() {
+                    @Override
+                    public void success() {
+                        try {
+                            verifyChecksum(destination, file.getSha256());
+                            progressCallback.onProgress(completedBytes.addAndGet(file.getSize()), totalBytes);
+                            finish(null);
+                        } catch (Exception exception) {
+                            finish(exception);
+                        }
+                    }
+
+                    @Override
+                    public void error(@NonNull Exception exception) {
+                        Logger.error(GraftPlugin.TAG, "Failed to download file: " + file.getHref(), exception);
+                        finish(exception);
+                    }
+
+                    private void finish(@Nullable Exception exception) {
+                        if (exception != null && firstError.compareAndSet(null, exception)) {
+                            synchronized (calls) {
+                                for (Call pending : calls) {
+                                    pending.cancel();
+                                }
+                            }
+                        }
+                        if (remaining.decrementAndGet() > 0) {
+                            return;
+                        }
+                        Exception error = firstError.get();
+                        if (error == null) {
+                            completionCallback.success();
+                        } else {
+                            completionCallback.error(error);
+                        }
+                    }
+                }
+            );
+            synchronized (calls) {
+                calls.add(call);
+            }
+        }
+    }
+
+    private Call downloadFile(
+        @NonNull String url,
+        @NonNull File file,
+        @NonNull DownloadProgressCallback progressCallback,
+        @NonNull EmptyCallback completionCallback
+    ) {
+        return httpClient.enqueue(
+            url,
+            new NonEmptyCallback<Response>() {
+                @Override
+                public void success(@NonNull Response response) {
+                    try {
+                        if (!response.isSuccessful()) {
+                            Logger.error(GraftPlugin.TAG, "Request to " + url + " failed with status " + response.code() + ".", null);
+                            response.close();
+                            throw new Exception(GraftPlugin.ERROR_DOWNLOAD_FAILED);
+                        }
+                        GraftHttpClient.writeResponseBodyToFile(response.body(), file, progressCallback);
+                        completionCallback.success();
+                    } catch (Exception exception) {
+                        completionCallback.error(exception);
+                    }
+                }
+
+                @Override
+                public void error(@NonNull Exception exception) {
+                    completionCallback.error(exception);
+                }
+            }
+        );
+    }
+
+    @NonNull
+    private String readBody(@NonNull Response response) throws Exception {
+        return new String(readBodyAsBytes(response), StandardCharsets.UTF_8);
+    }
+
+    @NonNull
+    private byte[] readBodyAsBytes(@NonNull Response response) throws Exception {
+        try (Response closeable = response) {
+            if (!closeable.isSuccessful()) {
+                Logger.error(GraftPlugin.TAG, "Request failed with status " + closeable.code() + ".", null);
+                throw new Exception(GraftPlugin.ERROR_DOWNLOAD_FAILED);
+            }
+            return closeable.body().bytes();
+        }
+    }
+
+    /**
+     * @return Where each digest of the running bundle can be read from, so unchanged files are copied
+     *         rather than downloaded.
+     */
+    @NonNull
+    private Map<String, String> loadCurrentHrefBySha256() {
+        String currentBundleId = getCurrentBundleId();
+        Manifest manifest =
+            currentBundleId == null
+                ? GraftPointer.readEmbeddedManifest(plugin.getContext())
+                : GraftPointer.readManifest(new File(buildBundleDirectoryFor(currentBundleId), GraftPointer.MANIFEST_FILE_NAME));
+        return manifest == null ? new HashMap<>() : manifest.buildHrefBySha256();
+    }
+
+    private boolean copyCurrentBundleFile(@NonNull String currentHref, @NonNull ManifestFile file, @NonNull File directory) {
+        String currentBundleId = getCurrentBundleId();
+        File destination = new File(directory, file.getHref());
+        try {
+            destination.getParentFile().mkdirs();
+            if (currentBundleId == null) {
+                try (
+                    InputStream source = plugin
+                        .getContext()
+                        .getAssets()
+                        .open(defaultWebAssetDir + "/" + currentHref)
+                ) {
+                    writeFile(destination, source);
+                }
+            } else {
+                try (FileInputStream source = new FileInputStream(new File(buildBundleDirectoryFor(currentBundleId), currentHref))) {
+                    writeFile(destination, source);
+                }
+            }
+            verifyChecksum(destination, file.getSha256());
+            return true;
+        } catch (Exception exception) {
+            Logger.warn(GraftPlugin.TAG, "Failed to reuse file " + currentHref + ": " + exception.getMessage());
+            destination.delete();
+            return false;
+        }
+    }
+
+    private void moveBundleIntoPlace(@NonNull File source, @NonNull String bundleId) throws Exception {
+        File bundlesDirectory = GraftPointer.buildBundlesDirectory(plugin.getContext());
+        if (!bundlesDirectory.exists() && !bundlesDirectory.mkdirs()) {
+            throw new Exception(GraftPlugin.ERROR_INSTALL_FAILED);
+        }
+        if (!source.renameTo(buildBundleDirectoryFor(bundleId))) {
+            throw new Exception(GraftPlugin.ERROR_INSTALL_FAILED);
+        }
+    }
+
+    @NonNull
     private File buildBundleDirectoryFor(@NonNull String bundleId) {
         return GraftPointer.buildBundleDirectory(plugin.getContext(), bundleId);
     }
 
-    private File buildTemporaryDirectory() {
-        String fileName = UUID.randomUUID().toString();
-        return new File(plugin.getContext().getCacheDir(), fileName);
-    }
-
-    private File buildTemporaryZipFile() {
-        String fileName = UUID.randomUUID().toString() + ".zip";
-        return new File(plugin.getContext().getCacheDir(), fileName);
-    }
-
-    private void copyCurrentBundleFile(@NonNull ManifestItem fileToCopy, @NonNull File destinationDirectory) throws IOException {
-        String href = fileToCopy.getHref();
-        String currentBundleId = getCurrentBundleId();
-        if (currentBundleId == null) {
-            // Create the source input stream
-            AssetManager assets = plugin.getContext().getAssets();
-            InputStream inputStream = assets.open(defaultWebAssetDir + "/" + href);
-            // Create the destination file
-            File destination = new File(destinationDirectory, href);
-            // Create all destination directories if they do not exist
-            destination.getParentFile().mkdirs();
-            // Copy the file
-            copyFile(inputStream, destination);
-        } else {
-            File currentBundleDirectory = buildBundleDirectoryFor(currentBundleId);
-            // Create the source and destination files
-            File source = new File(currentBundleDirectory, href);
-            File destination = new File(destinationDirectory, href);
-            // Create all destination directories if they do not exist
-            destination.getParentFile().mkdirs();
-            // Copy the file
-            copyFile(source, destination);
+    private void writeFile(@NonNull File file, @NonNull byte[] content) throws IOException {
+        try (FileOutputStream out = new FileOutputStream(file)) {
+            out.write(content);
         }
     }
 
-    private List<ManifestItem> copyCurrentBundleFilesAndReturnFailures(
-        @NonNull List<ManifestItem> filesToCopy,
-        @NonNull File destinationDirectory
-    ) {
-        List<ManifestItem> missingItems = new ArrayList<>();
-        for (ManifestItem fileToCopy : filesToCopy) {
-            boolean success = tryCopyCurrentBundleFile(fileToCopy, destinationDirectory);
-            if (!success) {
-                Logger.warn(GraftPlugin.TAG, "Failed to copy file: " + fileToCopy.getHref());
-                // If the file could not be copied, add it to the list of missing items
-                missingItems.add(fileToCopy);
+    private void writeFile(@NonNull File file, @NonNull InputStream input) throws IOException {
+        try (FileOutputStream out = new FileOutputStream(file)) {
+            byte[] buffer = new byte[8192];
+            int length;
+            while ((length = input.read(buffer)) > 0) {
+                out.write(buffer, 0, length);
             }
         }
-        return missingItems;
-    }
-
-    private void copyFile(File input, File output) throws IOException {
-        FileInputStream in = new FileInputStream(input);
-        FileOutputStream out = new FileOutputStream(output);
-        byte[] buffer = new byte[1024];
-        int length;
-        while ((length = in.read(buffer)) > 0) {
-            out.write(buffer, 0, length);
-        }
-        out.close();
-        in.close();
-    }
-
-    private void copyFile(InputStream input, File output) throws IOException {
-        FileOutputStream out = new FileOutputStream(output);
-        byte[] buffer = new byte[1024];
-        int length;
-        while ((length = input.read(buffer)) > 0) {
-            out.write(buffer, 0, length);
-        }
-        out.close();
-        input.close();
-    }
-
-    private void createBundlesDirectory() {
-        File file = buildBundlesDirectory();
-        if (!file.exists()) {
-            file.mkdirs();
-        }
-    }
-
-    private PublicKey createPublicKeyFromString(@NonNull String value) throws Exception {
-        try {
-            value = value.replace("-----BEGIN PUBLIC KEY-----", "").replace("-----END PUBLIC KEY-----", "").replace("\n", "");
-            byte[] byteKey = Base64.decode(value, Base64.DEFAULT);
-            X509EncodedKeySpec X509publicKey = new X509EncodedKeySpec(byteKey);
-            KeyFactory keyFactory = KeyFactory.getInstance("RSA");
-            return keyFactory.generatePublic(X509publicKey);
-        } catch (Exception exception) {
-            Logger.error(GraftPlugin.TAG, exception.getMessage(), exception);
-            throw new Exception(GraftPlugin.ERROR_PUBLIC_KEY_INVALID);
-        }
-    }
-
-    private File createTemporaryDirectory() {
-        File file = buildTemporaryDirectory();
-        file.mkdir();
-        return file;
     }
 
     private void deleteBundleById(@NonNull String bundleId) {
-        // Delete the bundle directory
-        File bundleDirectory = buildBundleDirectoryFor(bundleId);
-        deleteFileRecursively(bundleDirectory);
-        // Reset the next bundle if it is the deleted bundle
-        String nextBundleId = getNextBundleId();
-        if (bundleId.equals(nextBundleId)) {
+        deleteFileRecursively(buildBundleDirectoryFor(bundleId));
+        if (bundleId.equals(getNextBundleId())) {
             setNextBundleById(null);
         }
     }
@@ -677,411 +741,29 @@ public class Graft {
     }
 
     private void deleteUnusedBundles() {
-        String[] bundleIds = getDownloadedBundleIds();
-        for (String bundleId : bundleIds) {
+        for (String bundleId : getDownloadedBundleIds()) {
             if (!isBundleInUse(bundleId)) {
                 deleteBundleById(bundleId);
             }
         }
     }
 
-    private Call downloadAndVerifyFile(
-        @NonNull String url,
-        @NonNull File file,
-        @Nullable String checksum,
-        @Nullable String signature,
-        @Nullable DownloadProgressCallback progressCallback,
-        @NonNull EmptyCallback completionCallback
-    ) {
-        return httpClient.enqueue(
-            url,
-            new NonEmptyCallback<Response>() {
-                @Override
-                public void success(@NonNull Response response) {
-                    try {
-                        if (response.isSuccessful()) {
-                            ResponseBody responseBody = response.body();
-                            GraftHttpClient.writeResponseBodyToFile(responseBody, file, progressCallback);
-
-                            // Extract checksum/signature from headers
-                            String finalChecksum = checksum == null ? GraftHttpClient.getChecksumFromResponse(response) : checksum;
-                            String finalSignature = signature == null ? GraftHttpClient.getSignatureFromResponse(response) : signature;
-
-                            // Verify file
-                            verifyFile(file, finalChecksum, finalSignature);
-                            completionCallback.success();
-                        } else {
-                            String errorMessage = response.body().string();
-                            Exception exception = new Exception(GraftPlugin.ERROR_DOWNLOAD_FAILED);
-                            Logger.error(GraftPlugin.TAG, errorMessage, exception);
-                            completionCallback.error(exception);
-                        }
-                    } catch (Exception e) {
-                        completionCallback.error(e);
-                    }
-                }
-
-                @Override
-                public void error(@NonNull Exception exception) {
-                    completionCallback.error(exception);
-                }
-            }
-        );
-    }
-
-    private Call downloadBundleFile(
-        @NonNull String baseUrl,
-        @NonNull String href,
-        @NonNull File destinationDirectory,
-        @Nullable DownloadProgressCallback progressCallback,
-        @NonNull EmptyCallback completionCallback
-    ) {
-        HttpUrl.Builder urlBuilder = HttpUrl.parse(baseUrl).newBuilder();
-        urlBuilder.addQueryParameter("href", href);
-        String url = urlBuilder.build().toString();
-
-        File destinationFile = new File(destinationDirectory, href);
-        destinationFile.getParentFile().mkdirs();
-        return downloadAndVerifyFile(url, destinationFile, null, null, progressCallback, completionCallback);
-    }
-
-    private void downloadBundleFiles(
-        @NonNull String baseUrl,
-        @NonNull List<ManifestItem> filesToDownload,
-        @NonNull File destinationDirectory,
-        @Nullable DownloadProgressCallback progressCallback,
-        @NonNull EmptyCallback completionCallback
-    ) {
-        if (filesToDownload.isEmpty()) {
-            if (progressCallback != null) {
-                progressCallback.onProgress(0, 0);
-            }
-            completionCallback.success();
-            return;
-        }
-
-        // Thread-safe progress tracking
-        AtomicLong totalBytesDownloaded = new AtomicLong(0);
-        long totalBytesToDownload = 0;
-        for (ManifestItem item : filesToDownload) {
-            totalBytesToDownload += item.getSizeInBytes();
-        }
-        final long finalTotalBytesToDownload = totalBytesToDownload;
-
-        // Coordination primitives
-        CountDownLatch latch = new CountDownLatch(filesToDownload.size());
-        AtomicReference<Exception> firstError = new AtomicReference<>();
-        AtomicBoolean completionHandled = new AtomicBoolean(false);
-        List<Call> activeCalls = new ArrayList<>();
-
-        // Start all downloads asynchronously (OkHttp's dispatcher handles parallelization)
-        for (ManifestItem item : filesToDownload) {
-            Call call = downloadBundleFile(
-                baseUrl,
-                item.getHref(),
-                destinationDirectory,
-                (downloadedBytes, totalBytes) -> {
-                    // Per-file progress
-                    if (progressCallback != null) {
-                        long totalProgress = totalBytesDownloaded.get() + downloadedBytes;
-                        progressCallback.onProgress(totalProgress, finalTotalBytesToDownload);
-                    }
-                },
-                new EmptyCallback() {
-                    @Override
-                    public void success() {
-                        // Update total progress
-                        totalBytesDownloaded.addAndGet(item.getSizeInBytes());
-                        if (progressCallback != null) {
-                            progressCallback.onProgress(totalBytesDownloaded.get(), finalTotalBytesToDownload);
-                        }
-                        latch.countDown();
-
-                        // Check if this was the last download to complete
-                        if (latch.getCount() == 0 && completionHandled.compareAndSet(false, true)) {
-                            Exception error = firstError.get();
-                            if (error != null) {
-                                completionCallback.error(error);
-                            } else {
-                                // Final progress update
-                                if (progressCallback != null) {
-                                    progressCallback.onProgress(finalTotalBytesToDownload, finalTotalBytesToDownload);
-                                }
-                                completionCallback.success();
-                            }
-                        }
-                    }
-
-                    @Override
-                    public void error(@NonNull Exception e) {
-                        // Capture first error and cancel all remaining downloads
-                        if (firstError.compareAndSet(null, e)) {
-                            Logger.error(GraftPlugin.TAG, "Failed to download file: " + item.getHref(), e);
-                            // Cancel all in-flight downloads (fail-fast)
-                            synchronized (activeCalls) {
-                                for (Call activeCall : activeCalls) {
-                                    if (!activeCall.isCanceled() && !activeCall.isExecuted()) {
-                                        activeCall.cancel();
-                                    }
-                                }
-                            }
-                        }
-                        latch.countDown();
-
-                        // Check if this was the last download to complete
-                        if (latch.getCount() == 0 && completionHandled.compareAndSet(false, true)) {
-                            completionCallback.error(firstError.get());
-                        }
-                    }
-                }
-            );
-            synchronized (activeCalls) {
-                activeCalls.add(call);
-            }
-        }
-    }
-
-    private void downloadBundleOfTypeManifest(
-        @NonNull String bundleId,
-        @NonNull String downloadUrl,
-        @NonNull EmptyCallback completionCallback
-    ) {
-        try {
-            // Create a temporary directory
-            File temporaryDirectory = createTemporaryDirectory();
-
-            // Download the latest manifest
-            downloadBundleFile(
-                downloadUrl,
-                manifestFileName,
-                temporaryDirectory,
-                null,
-                new EmptyCallback() {
-                    @Override
-                    public void success() {
-                        try {
-                            File latestManifestFile = new File(temporaryDirectory, manifestFileName);
-                            Manifest latestManifest = loadManifest(latestManifestFile);
-                            // Load the current manifest
-                            Manifest currentManifest = loadCurrentManifest();
-                            // Compare the manifests
-                            List<ManifestItem> itemsToCopy = new ArrayList<>();
-                            List<ManifestItem> itemsToDownload = new ArrayList<>();
-                            if (currentManifest == null) {
-                                itemsToDownload.addAll(latestManifest.getItems());
-                            } else {
-                                itemsToCopy.addAll(Manifest.findDuplicateItems(latestManifest, currentManifest));
-                                itemsToDownload.addAll(Manifest.findMissingItems(latestManifest, currentManifest));
-                            }
-                            // Copy the files
-                            List<ManifestItem> missingItems = copyCurrentBundleFilesAndReturnFailures(itemsToCopy, temporaryDirectory);
-                            // If items could not be copied, add them to the list of items to download
-                            if (!missingItems.isEmpty()) {
-                                itemsToDownload.addAll(missingItems);
-                            }
-
-                            // Download the files
-                            downloadBundleFiles(
-                                downloadUrl,
-                                itemsToDownload,
-                                temporaryDirectory,
-                                (downloadedBytes, totalBytes) -> {
-                                    DownloadBundleProgressEvent event = new DownloadBundleProgressEvent(
-                                        bundleId,
-                                        downloadedBytes,
-                                        totalBytes
-                                    );
-                                    notifyDownloadBundleProgressListeners(event);
-                                },
-                                new EmptyCallback() {
-                                    @Override
-                                    public void success() {
-                                        try {
-                                            // Add the bundle
-                                            addBundleOfTypeManifest(bundleId, temporaryDirectory);
-                                            completionCallback.success();
-                                        } catch (Exception e) {
-                                            completionCallback.error(e);
-                                        }
-                                    }
-
-                                    @Override
-                                    public void error(@NonNull Exception exception) {
-                                        completionCallback.error(exception);
-                                    }
-                                }
-                            );
-                        } catch (Exception e) {
-                            completionCallback.error(e);
-                        }
-                    }
-
-                    @Override
-                    public void error(@NonNull Exception exception) {
-                        completionCallback.error(exception);
-                    }
-                }
-            );
-        } catch (Exception e) {
-            completionCallback.error(e);
-        }
-    }
-
-    private void downloadBundleOfTypeZip(
-        @NonNull String bundleId,
-        @Nullable String checksum,
-        @Nullable String signature,
-        @NonNull String downloadUrl,
-        @NonNull EmptyCallback completionCallback
-    ) {
-        File file = buildTemporaryZipFile();
-        // Download the bundle
-        downloadAndVerifyFile(
-            downloadUrl,
-            file,
-            checksum,
-            signature,
-            (downloadedBytes, totalBytes) -> {
-                DownloadBundleProgressEvent event = new DownloadBundleProgressEvent(bundleId, downloadedBytes, totalBytes);
-                notifyDownloadBundleProgressListeners(event);
-            },
-            new EmptyCallback() {
-                @Override
-                public void success() {
-                    try {
-                        // Add the bundle
-                        addBundleOfTypeZip(bundleId, file);
-                        // Delete the temporary file
-                        file.delete();
-                        completionCallback.success();
-                    } catch (Exception e) {
-                        completionCallback.error(e);
-                    }
-                }
-
-                @Override
-                public void error(@NonNull Exception exception) {
-                    // Delete the temporary file on error
-                    file.delete();
-                    completionCallback.error(exception);
-                }
-            }
-        );
-    }
-
-    private void fetchLatestBundleInternal(
-        @NonNull FetchLatestBundleOptions options,
-        @NonNull NonEmptyCallback<GetLatestBundleResponse> callback
-    ) {
-        try {
-            String channel = options.getChannel() == null ? getChannel() : options.getChannel();
-            String url = new HttpUrl.Builder()
-                .scheme("https")
-                .host(config.getServerDomain())
-                .addPathSegment("v1")
-                .addPathSegment("apps")
-                .addPathSegment(getAppId())
-                .addPathSegment("bundles")
-                .addPathSegment("latest")
-                .addQueryParameter("appVersionCode", getVersionCodeAsString())
-                .addQueryParameter("appVersionName", getVersionName())
-                .addQueryParameter("bundleId", getCurrentBundleId())
-                .addQueryParameter("channelName", channel)
-                .addQueryParameter("customId", preferences.getCustomId())
-                .addQueryParameter("deviceId", getDeviceId())
-                .addQueryParameter("osVersion", String.valueOf(Build.VERSION.SDK_INT))
-                .addQueryParameter("platform", "0")
-                .addQueryParameter("pluginVersion", GraftPlugin.VERSION)
-                .build()
-                .toString();
-            Logger.debug(GraftPlugin.TAG, "Fetching latest bundle: " + url);
-
-            httpClient.enqueue(
-                url,
-                new NonEmptyCallback<Response>() {
-                    @Override
-                    public void success(@NonNull Response response) {
-                        try {
-                            String responseBodyString = response.body().string();
-                            Logger.debug(GraftPlugin.TAG, "Latest bundle response: " + responseBodyString);
-                            if (response.isSuccessful()) {
-                                JSONObject responseJson = new JSONObject(responseBodyString);
-                                GetLatestBundleResponse result = new GetLatestBundleResponse(responseJson);
-                                callback.success(result);
-                            } else {
-                                callback.success(null);
-                            }
-                        } catch (Exception e) {
-                            callback.error(e);
-                        }
-                    }
-
-                    @Override
-                    public void error(@NonNull Exception exception) {
-                        callback.error(exception);
-                    }
-                }
-            );
-        } catch (Exception e) {
-            callback.error(e);
-        }
-    }
-
+    @NonNull
     private String[] getDownloadedBundleIds() {
-        File bundlesDirectory = buildBundlesDirectory();
-        File[] bundles = bundlesDirectory.listFiles();
+        File[] bundles = GraftPointer.buildBundlesDirectory(plugin.getContext()).listFiles();
         if (bundles == null) {
             return new String[0];
         }
-
         String[] bundleIds = new String[bundles.length];
         for (int i = 0; i < bundles.length; i++) {
             bundleIds[i] = bundles[i].getName();
         }
-
         return bundleIds;
-    }
-
-    private byte[] getChecksumForFileAsBytes(@NonNull File file) throws Exception {
-        try {
-            MessageDigest digest = MessageDigest.getInstance("SHA-256");
-            BufferedSource source = Okio.buffer(Okio.source(file));
-            Buffer buffer = new Buffer();
-            for (long bytesRead; (bytesRead = source.read(buffer, 2048)) != -1; ) {
-                digest.update(buffer.readByteArray());
-            }
-            source.close();
-            return digest.digest();
-        } catch (IOException exception) {
-            Logger.error(GraftPlugin.TAG, exception.getMessage(), exception);
-            throw new Exception(GraftPlugin.ERROR_CHECKSUM_CALCULATION_FAILED);
-        }
-    }
-
-    private String getChecksumForFileAsString(@NonNull File file) throws Exception {
-        byte[] checksumBytes = getChecksumForFileAsBytes(file);
-        StringBuilder checksum = new StringBuilder();
-        for (byte checksumByte : checksumBytes) {
-            checksum.append(Integer.toString((checksumByte & 0xff) + 0x100, 16).substring(1));
-        }
-        return checksum.toString();
-    }
-
-    @Nullable
-    private String getAppId() {
-        String appId = preferences.getAppId();
-        if (appId != null) {
-            return appId;
-        }
-        return config.getAppId();
     }
 
     @Nullable
     private String getChannel() {
-        String channel = null;
-        if (config.getDefaultChannel() != null) {
-            channel = config.getDefaultChannel();
-        }
+        String channel = config.getDefaultChannel();
         String nativeChannel = getNativeChannel();
         if (nativeChannel != null) {
             channel = nativeChannel;
@@ -1105,11 +787,11 @@ public class Graft {
     }
 
     /**
-     * @return The current bundle ID or `null` if the default bundle is in use.
+     * @return The current bundle ID or `null` if the bundle embedded in the binary is in use.
      */
     @Nullable
     private String getCurrentBundleId() {
-        String currentPath = getCurrentCapacitorServerPath();
+        String currentPath = plugin.getBridge().getServerBasePath();
         if (currentPath.equals(defaultWebAssetDir)) {
             return null;
         }
@@ -1117,153 +799,79 @@ public class Graft {
     }
 
     /**
-     * @return The absolute path to the current bundle directory (`public` for the built-in bundle).
-     */
-    private String getCurrentCapacitorServerPath() {
-        return plugin.getBridge().getServerBasePath();
-    }
-
-    @NonNull
-    private String getDeviceId() {
-        String deviceId = preferences.getDeviceIdForApp(getAppId());
-        if (deviceId == null) {
-            deviceId = UUID.randomUUID().toString().toLowerCase();
-            preferences.setDeviceIdForApp(getAppId(), deviceId);
-        }
-        return deviceId;
-    }
-
-    /**
-     * @return The next bundle ID or `null` if the default bundle will be used.
+     * @return The next bundle ID or `null` if the bundle embedded in the binary will be used.
      */
     @Nullable
     private String getNextBundleId() {
         return GraftPointer.getActiveBundleId(plugin.getContext());
     }
 
-    /**
-     * @return The previous bundle ID or `null` if the default bundle was used.
-     */
-    @Nullable
-    private String getPreviousBundleId() {
-        return preferences.getPreviousBundleId();
-    }
-
-    private int getVersionCodeAsInt() throws PackageManager.NameNotFoundException {
-        return (int) PackageInfoCompat.getLongVersionCode(getPackageInfo());
-    }
-
-    private String getVersionCodeAsString() throws PackageManager.NameNotFoundException {
-        return String.valueOf(getVersionCodeAsInt());
-    }
-
-    private String getVersionName() throws PackageManager.NameNotFoundException {
-        return getPackageInfo().versionName;
+    private long getNativeBuild() throws PackageManager.NameNotFoundException {
+        return PackageInfoCompat.getLongVersionCode(getPackageInfo());
     }
 
     private boolean hasBundleById(@NonNull String bundleId) {
-        File bundleDirectory = buildBundleDirectoryFor(bundleId);
-        return bundleDirectory.exists();
+        return buildBundleDirectoryFor(bundleId).exists();
     }
 
     private boolean isBundleInUse(@NonNull String bundleId) {
-        String currentBundleId = getCurrentBundleId();
-        String nextBundleId = getNextBundleId();
-        String lastKnownGoodBundleId = preferences.getLastKnownGoodBundleId();
-        return bundleId.equals(currentBundleId) || bundleId.equals(nextBundleId) || bundleId.equals(lastKnownGoodBundleId);
+        return (
+            bundleId.equals(getCurrentBundleId()) ||
+            bundleId.equals(getNextBundleId()) ||
+            bundleId.equals(preferences.getLastKnownGoodBundleId())
+        );
     }
 
-    @Nullable
-    private Manifest loadCurrentManifest() throws Exception {
-        String currentBundleId = getCurrentBundleId();
-        if (currentBundleId == null) {
-            AssetManager assets = plugin.getContext().getAssets();
-            boolean manifestFileExists = Arrays.asList(assets.list(defaultWebAssetDir)).contains(manifestFileName);
-            if (manifestFileExists) {
-                InputStream inputStream = assets.open(defaultWebAssetDir + "/" + manifestFileName);
-                BufferedSource source = Okio.buffer(Okio.source(inputStream));
-                return loadManifest(source);
-            } else {
-                return null;
-            }
-        } else {
-            File currentBundleDirectory = buildBundleDirectoryFor(currentBundleId);
-            File manifestFile = new File(currentBundleDirectory, manifestFileName);
-            if (manifestFile.exists()) {
-                return loadManifest(manifestFile);
-            } else {
-                return null;
-            }
-        }
-    }
-
-    private Manifest loadManifest(@NonNull BufferedSource source) throws Exception {
-        String jsonAsString = source.readUtf8();
-        JSONArray jsonArray = new JSONArray(jsonAsString);
-        return new Manifest(jsonArray);
-    }
-
-    private Manifest loadManifest(@NonNull File file) throws Exception {
-        BufferedSource source = Okio.buffer(Okio.source(file));
-        return loadManifest(source);
-    }
-
-    private void notifyDownloadBundleProgressListeners(@NonNull final DownloadBundleProgressEvent event) {
-        plugin.notifyDownloadBundleProgressListeners(event);
+    private void notifyDownloadBundleProgressListeners(@NonNull String bundleId, long downloadedBytes, long totalBytes) {
+        plugin.notifyDownloadBundleProgressListeners(new DownloadBundleProgressEvent(bundleId, downloadedBytes, totalBytes));
     }
 
     private void performAutoUpdate() {
-        // Check if enough time has passed since the last check
         long now = System.currentTimeMillis();
         if (lastAutoUpdateCheckTimestamp > 0 && (now - lastAutoUpdateCheckTimestamp) < autoUpdateIntervalMs) {
             Logger.debug(GraftPlugin.TAG, "Auto-update skipped. Last check was less than 15 minutes ago.");
             return;
         }
-
-        // Update the timestamp
         lastAutoUpdateCheckTimestamp = now;
 
-        // Run sync
         Logger.debug(GraftPlugin.TAG, "Auto-update started.");
-        SyncOptions options = new SyncOptions((String) null);
-        NonEmptyCallback<Result> callback = new NonEmptyCallback<>() {
-            @Override
-            public void success(@NonNull Result result) {
-                Logger.debug(GraftPlugin.TAG, "Auto-update completed successfully.");
-            }
+        sync(
+            new SyncOptions((String) null),
+            new NonEmptyCallback<>() {
+                @Override
+                public void success(@NonNull Result result) {
+                    Logger.debug(GraftPlugin.TAG, "Auto-update completed successfully.");
+                }
 
-            @Override
-            public void error(@NonNull Exception exception) {
-                Logger.error(GraftPlugin.TAG, "Auto-update failed: " + exception.getMessage(), exception);
+                @Override
+                public void error(@NonNull Exception exception) {
+                    Logger.error(GraftPlugin.TAG, "Auto-update failed: " + exception.getMessage(), exception);
+                }
             }
-        };
-        sync(options, callback);
+        );
     }
 
     private void rollback() {
-        // Set the rollback flag
         rollbackPerformed = true;
-        // Set the new previous bundle ID
         String currentBundleId = getCurrentBundleId();
-        setPreviousBundleId(currentBundleId);
-        // Log the rollback result
+        preferences.setPreviousBundleId(currentBundleId);
         if (currentBundleId == null) {
-            Logger.debug(GraftPlugin.TAG, "App is not ready. Default bundle is already in use.");
-        } else {
-            String targetBundleId = resolveRollbackTargetBundleId();
-            Logger.debug(
-                GraftPlugin.TAG,
-                "App is not ready. Rolling back to " + (targetBundleId == null ? "default bundle." : "bundle " + targetBundleId + ".")
-            );
-            setNextBundleById(targetBundleId);
-            setCurrentBundleById(targetBundleId);
+            Logger.debug(GraftPlugin.TAG, "App is not ready. Embedded bundle is already in use.");
+            return;
         }
+        String targetBundleId = resolveRollbackTargetBundleId();
+        Logger.debug(
+            GraftPlugin.TAG,
+            "App is not ready. Rolling back to " + (targetBundleId == null ? "the embedded bundle." : "bundle " + targetBundleId + ".")
+        );
+        setNextBundleById(targetBundleId);
+        setCurrentBundleById(targetBundleId);
     }
 
     @Nullable
     private String resolveRollbackTargetBundleId() {
         String bundleId = preferences.getLastKnownGoodBundleId();
-        if (bundleId == null || isBlockedBundleId(bundleId) || !hasBundleById(bundleId)) {
+        if (bundleId == null || getBlockedBundleIds().contains(bundleId) || !hasBundleById(bundleId)) {
             return null;
         }
         return bundleId;
@@ -1275,19 +883,16 @@ public class Graft {
         if (files == null) {
             return null;
         }
-        String[] fileNames = new String[files.length];
-        for (int i = 0; i < files.length; i++) {
-            fileNames[i] = files[i].getName();
+        for (File file : files) {
+            if (file.getName().equals(GraftPointer.INDEX_FILE_NAME)) {
+                return file;
+            }
         }
-        if (Arrays.asList(fileNames).contains("index.html")) {
-            return new File(directory, "index.html");
-        } else {
-            for (File file : files) {
-                if (file.isDirectory()) {
-                    File indexHtmlFile = searchIndexHtmlFile(file);
-                    if (indexHtmlFile != null) {
-                        return indexHtmlFile;
-                    }
+        for (File file : files) {
+            if (file.isDirectory()) {
+                File indexHtmlFile = searchIndexHtmlFile(file);
+                if (indexHtmlFile != null) {
+                    return indexHtmlFile;
                 }
             }
         }
@@ -1295,30 +900,20 @@ public class Graft {
     }
 
     /**
-     * @param bundleId The bundle ID to set as the current bundle. If `null`, the default bundle will be used.
+     * @param bundleId The bundle ID to serve now. If `null`, the bundle embedded in the binary is served.
      */
     private void setCurrentBundleById(@Nullable String bundleId) {
         if (bundleId == null) {
-            setCurrentCapacitorServerPath(defaultWebAssetDir);
+            plugin.getBridge().setServerAssetPath(defaultWebAssetDir);
         } else {
-            File bundleDirectory = buildBundleDirectoryFor(bundleId);
-            setCurrentCapacitorServerPath(bundleDirectory.getPath());
+            plugin.getBridge().setServerBasePath(buildBundleDirectoryFor(bundleId).getPath());
         }
-    }
-
-    private void setCurrentCapacitorServerPath(@NonNull String path) {
-        if (path.equals(defaultWebAssetDir)) {
-            this.plugin.getBridge().setServerAssetPath(path);
-        } else {
-            this.plugin.getBridge().setServerBasePath(path);
-        }
-        this.plugin.getBridge().reload();
-        // Notify listeners
-        notifyReloadedListeners();
+        plugin.getBridge().reload();
+        plugin.notifyReloadedListeners();
     }
 
     /**
-     * @param bundleId The bundle ID to set as the next bundle. If `null`, the default bundle will be used.
+     * @param bundleId The bundle ID to serve on the next launch. If `null`, the bundle embedded in the binary is served.
      */
     private void setNextBundleById(@Nullable String bundleId) {
         if (bundleId == null) {
@@ -1326,79 +921,29 @@ public class Graft {
         } else {
             GraftPointer.setActiveBundleId(plugin.getContext(), bundleId);
         }
-
-        // Notify listeners
-        notifyNextBundleSetListeners(bundleId);
+        plugin.notifyNextBundleSetListeners(new NextBundleSetEvent(bundleId));
     }
 
-    private void notifyNextBundleSetListeners(@Nullable String bundleId) {
-        NextBundleSetEvent event = new NextBundleSetEvent(bundleId);
-        plugin.notifyNextBundleSetListeners(event);
-    }
-
-    private void notifyReloadedListeners() {
-        plugin.notifyReloadedListeners();
+    @NonNull
+    private Set<String> getBlockedBundleIds() {
+        String blockedIds = preferences.getBlockedBundleIds();
+        if (blockedIds == null || blockedIds.isEmpty()) {
+            return new LinkedHashSet<>();
+        }
+        return new LinkedHashSet<>(Arrays.asList(blockedIds.split(",")));
     }
 
     private void addBlockedBundleId(@NonNull String bundleId) {
-        String blockedIds = preferences.getBlockedBundleIds();
-        List<String> blockedList = new ArrayList<>();
-
-        // Parse existing blocked IDs
-        if (blockedIds != null && !blockedIds.isEmpty()) {
-            String[] ids = blockedIds.split(",");
-            blockedList.addAll(Arrays.asList(ids));
-        }
-
-        // Skip if already blocked
-        if (blockedList.contains(bundleId)) {
+        Set<String> blocked = getBlockedBundleIds();
+        if (!blocked.add(bundleId)) {
             return;
         }
-
-        // Remove oldest if limit reached
-        if (blockedList.size() >= 100) {
+        List<String> blockedList = new ArrayList<>(blocked);
+        while (blockedList.size() > 100) {
             blockedList.remove(0);
         }
-
-        // Add new bundle
-        blockedList.add(bundleId);
-
-        // Save back to preferences
-        String newBlockedIds = String.join(",", blockedList);
-        preferences.setBlockedBundleIds(newBlockedIds);
-
+        preferences.setBlockedBundleIds(String.join(",", blockedList));
         Logger.debug(GraftPlugin.TAG, "Bundle blocked: " + bundleId);
-    }
-
-    private boolean isBlockedBundleId(@NonNull String bundleId) {
-        String blockedIds = preferences.getBlockedBundleIds();
-        if (blockedIds == null || blockedIds.isEmpty()) {
-            return false;
-        }
-
-        String[] ids = blockedIds.split(",");
-        return Arrays.asList(ids).contains(bundleId);
-    }
-
-    private void checkAndResetConfigIfVersionChanged() throws PackageManager.NameNotFoundException {
-        int currentVersionCode = getVersionCodeAsInt();
-        int lastVersionCode = preferences.getLastVersionCode();
-
-        if (lastVersionCode == -1 || lastVersionCode != currentVersionCode) {
-            Logger.debug(
-                GraftPlugin.TAG,
-                "App version changed (last: " + lastVersionCode + ", current: " + currentVersionCode + "), resetting config."
-            );
-            resetConfig();
-            // Capacitor clears CAP_SERVER_PATH on a new binary; our own pointer is not covered by that
-            GraftPointer.clearActiveBundleId(plugin.getContext());
-            preferences.setLastKnownGoodBundleId(null);
-            preferences.setLastVersionCode(currentVersionCode);
-        }
-    }
-
-    private void setPreviousBundleId(@Nullable String bundleId) {
-        preferences.setPreviousBundleId(bundleId);
     }
 
     private void startRollbackTimer() {
@@ -1406,92 +951,78 @@ public class Graft {
             return;
         }
         stopRollbackTimer();
-        rollbackHandler.postDelayed(() -> rollback(), config.getReadyTimeout());
+        rollbackHandler.postDelayed(this::rollback, config.getReadyTimeout());
     }
 
     private void stopRollbackTimer() {
         rollbackHandler.removeCallbacksAndMessages(null);
     }
 
-    private boolean tryCopyCurrentBundleFile(@NonNull ManifestItem fileToCopy, @NonNull File destinationDirectory) {
-        try {
-            copyCurrentBundleFile(fileToCopy, destinationDirectory);
-            return true;
-        } catch (IOException exception) {
-            return false;
-        }
-    }
-
     private File unzipFile(@NonNull File zipFile) throws IOException {
-        File destination = buildTemporaryDirectory();
-        String destinationPath = destination.getPath();
+        File destination = new File(plugin.getContext().getCacheDir(), UUID.randomUUID().toString());
         ZipFile zip = new ZipFile(zipFile);
         // Clear stored Unix permissions to prevent EACCES errors on newer Android versions
         // where restrictive directory permissions from the zip block file creation.
         for (FileHeader fileHeader : zip.getFileHeaders()) {
             fileHeader.setExternalFileAttributes(null);
         }
-        zip.extractAll(destinationPath);
+        zip.extractAll(destination.getPath());
         return destination;
     }
 
-    private boolean verifyChecksumForFile(@NonNull File file, @NonNull String checksum) throws Exception {
-        String receivedChecksum = getChecksumForFileAsString(file);
-        return checksum.equals(receivedChecksum);
-    }
-
-    private void verifyFile(@NonNull File file, @Nullable String checksum, @Nullable String signature) throws Exception {
-        String publicKey = config.getPublicKey();
-        if (publicKey != null) {
-            // Verify the signature
-            if (signature == null) {
-                throw new Exception(GraftPlugin.ERROR_SIGNATURE_MISSING);
-            }
-            // Verify the signature
-            boolean verified = verifySignatureForFile(file, signature, publicKey);
-            if (!verified) {
-                throw new Exception(GraftPlugin.ERROR_SIGNATURE_VERIFICATION_FAILED);
-            }
-        }
-        // Verify the checksum
-        else if (checksum != null) {
-            // Calculate the checksum
-            boolean verified = verifyChecksumForFile(file, checksum);
-            if (!verified) {
-                throw new Exception(GraftPlugin.ERROR_CHECKSUM_MISMATCH);
-            }
-        }
-    }
-
-    private boolean verifySignatureForFile(@NonNull File file, @NonNull String signature, @NonNull String keyAsString) throws Exception {
-        PublicKey key = createPublicKeyFromString(keyAsString);
-        return verifySignatureForFile(file, signature, key);
-    }
-
-    private boolean verifySignatureForFile(@NonNull File file, @NonNull String signature, @NonNull PublicKey key) throws Exception {
-        try {
-            byte[] signatureBytes = Base64.decode(signature, Base64.DEFAULT);
-            Signature sig = Signature.getInstance("SHA256withRSA");
-            sig.initVerify(key);
-            BufferedSource source = Okio.buffer(Okio.source(file));
+    private void verifyChecksum(@NonNull File file, @NonNull String expected) throws Exception {
+        MessageDigest digest = MessageDigest.getInstance("SHA-256");
+        try (BufferedSource source = Okio.buffer(Okio.source(file))) {
             Buffer buffer = new Buffer();
-            for (long bytesRead; (bytesRead = source.read(buffer, 2048)) != -1; ) {
-                sig.update(buffer.readByteArray());
+            while (source.read(buffer, 8192) != -1) {
+                digest.update(buffer.readByteArray());
             }
-            source.close();
-            return sig.verify(signatureBytes);
+        }
+        StringBuilder checksum = new StringBuilder();
+        for (byte value : digest.digest()) {
+            checksum.append(Integer.toString((value & 0xff) + 0x100, 16).substring(1));
+        }
+        if (!checksum.toString().equals(expected)) {
+            throw new Exception(GraftPlugin.ERROR_CHECKSUM_MISMATCH);
+        }
+    }
+
+    @NonNull
+    private PublicKey loadPublicKey() throws Exception {
+        String publicKey = config.getPublicKey();
+        if (publicKey == null) {
+            throw new Exception(GraftPlugin.ERROR_PUBLIC_KEY_MISSING);
+        }
+        try {
+            String value = publicKey.replace("-----BEGIN PUBLIC KEY-----", "").replace("-----END PUBLIC KEY-----", "").replace("\n", "");
+            return KeyFactory.getInstance("RSA").generatePublic(new X509EncodedKeySpec(Base64.decode(value, Base64.DEFAULT)));
         } catch (Exception exception) {
             Logger.error(GraftPlugin.TAG, exception.getMessage(), exception);
+            throw new Exception(GraftPlugin.ERROR_PUBLIC_KEY_INVALID);
+        }
+    }
+
+    private void verifySignature(@NonNull byte[] content, @NonNull String signature, @NonNull PublicKey publicKey) throws Exception {
+        boolean verified;
+        try {
+            Signature verifier = Signature.getInstance("SHA256withRSA");
+            verifier.initVerify(publicKey);
+            verifier.update(content);
+            verified = verifier.verify(Base64.decode(signature, Base64.DEFAULT));
+        } catch (Exception exception) {
+            Logger.error(GraftPlugin.TAG, exception.getMessage(), exception);
+            throw new Exception(GraftPlugin.ERROR_SIGNATURE_VERIFICATION_FAILED);
+        }
+        if (!verified) {
             throw new Exception(GraftPlugin.ERROR_SIGNATURE_VERIFICATION_FAILED);
         }
     }
 
     private PackageInfo getPackageInfo() throws PackageManager.NameNotFoundException {
-        String packageName = this.plugin.getContext().getPackageName();
+        String packageName = plugin.getContext().getPackageName();
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            return this.plugin.getContext().getPackageManager().getPackageInfo(packageName, PackageManager.PackageInfoFlags.of(0));
-        } else {
-            return this.plugin.getContext().getPackageManager().getPackageInfo(packageName, 0);
+            return plugin.getContext().getPackageManager().getPackageInfo(packageName, PackageManager.PackageInfoFlags.of(0));
         }
+        return plugin.getContext().getPackageManager().getPackageInfo(packageName, 0);
     }
 }
