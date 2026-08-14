@@ -6,11 +6,11 @@ public struct Manifest: Decodable {
     private static let supportedSchema = 1
 
     let id: String
-    let channel: String
+    /// Set only on a manifest published to a channel, where it stops a release for one channel being
+    /// served on another. The manifest generated for the embedded bundle has no channel to name.
+    let channel: String?
     let counter: Int
     let minNativeBuild: Int
-    /// Replay bounds. Absent on the manifest generated for the bundle embedded in the binary, which
-    /// is never installed and so never verified; required of anything served on a channel.
     let notBefore: Int?
     let expiresAt: Int?
     let files: [ManifestFile]
@@ -26,7 +26,7 @@ public struct Manifest: Decodable {
             throw DecodingError.dataCorruptedError(forKey: .schema, in: container, debugDescription: "Unsupported manifest schema: \(schema)")
         }
         id = try container.decode(String.self, forKey: .id)
-        channel = try container.decode(String.self, forKey: .channel)
+        channel = try container.decodeIfPresent(String.self, forKey: .channel)
         counter = try container.decode(Int.self, forKey: .counter)
         minNativeBuild = try container.decode(Int.self, forKey: .minNativeBuild)
         notBefore = try container.decodeIfPresent(Int.self, forKey: .notBefore)

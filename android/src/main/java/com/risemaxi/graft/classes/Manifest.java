@@ -21,16 +21,16 @@ public class Manifest {
     @NonNull
     private final String id;
 
-    @NonNull
+    /**
+     * Set only on a manifest published to a channel, where it stops a release for one channel being
+     * served on another. The manifest generated for the embedded bundle has no channel to name.
+     */
+    @Nullable
     private final String channel;
 
     private final long counter;
     private final long minNativeBuild;
 
-    /**
-     * Replay bounds. Absent on the manifest generated for the bundle embedded in the binary, which
-     * is never installed and so never verified; required of anything served on a channel.
-     */
     @Nullable
     private final Long notBefore;
 
@@ -46,7 +46,7 @@ public class Manifest {
             throw new JSONException("Unsupported manifest schema: " + schema);
         }
         this.id = json.getString("id");
-        this.channel = json.getString("channel");
+        this.channel = json.has("channel") ? json.getString("channel") : null;
         this.counter = json.getLong("counter");
         this.minNativeBuild = json.getLong("minNativeBuild");
         this.notBefore = json.has("notBefore") ? json.getLong("notBefore") : null;
@@ -65,7 +65,7 @@ public class Manifest {
         return id;
     }
 
-    @NonNull
+    @Nullable
     public String getChannel() {
         return channel;
     }

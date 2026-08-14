@@ -109,9 +109,10 @@ match the channel entry, `channel` matches the channel it was fetched from,
 `minNativeBuild <= versionCode`, `counter > highestInstalledCounter`, and
 `notBefore <= now < expiresAt`. `href` must be a relative path with no `.` or `..` segment.
 
-`notBefore` and `expiresAt` are the only optional fields, and only because the manifest generated
-for the embedded bundle has no replay window to describe — it is never fetched, so it is never
-verified. A manifest served on a channel that omits them is rejected.
+`channel`, `notBefore` and `expiresAt` are optional to parse and required to verify. The same shape
+describes a release and the bundle sitting on disk, and the manifest the native build generates for
+the embedded bundle has no channel or replay window to name — it is never fetched, so it is never
+verified. A manifest served on a channel that omits any of them is rejected.
 
 Each installed file is verified against its `sha256` — whether downloaded or copied from the running
 bundle — and the manifest is written into the bundle directory only after every file has passed, so

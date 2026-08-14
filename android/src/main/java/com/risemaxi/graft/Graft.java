@@ -457,7 +457,7 @@ public class Graft {
             !manifest.getId().equals(release.getId()) ||
             manifest.getCounter() != release.getCounter() ||
             manifest.getMinNativeBuild() != release.getMinNativeBuild() ||
-            !manifest.getChannel().equals(channel)
+            !channel.equals(manifest.getChannel())
         ) {
             throw new Exception(GraftPlugin.ERROR_MANIFEST_MISMATCH);
         }
