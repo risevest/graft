@@ -81,6 +81,7 @@ public final class GraftPointer {
     private static void applyBinaryChangeRetention(@NonNull Context context) {
         long nativeBuild = readNativeBuild(context);
         if (nativeBuild < 0) {
+            Logger.error(GraftPlugin.TAG, "Cannot read the native build number, so a staged bundle cannot be reconciled.", null);
             return;
         }
         SharedPreferences preferences = GraftPreferences.getSharedPreferences(context);
@@ -100,11 +101,9 @@ public final class GraftPointer {
         }
 
         SharedPreferences.Editor editor = preferences.edit().putLong(GraftPreferences.LAST_NATIVE_BUILD_KEY, nativeBuild);
-        if (embeddedManifest != null) {
-            long highestInstalledCounter = preferences.getLong(GraftPreferences.HIGHEST_INSTALLED_COUNTER_KEY, 0);
-            if (embeddedManifest.getCounter() > highestInstalledCounter) {
-                editor.putLong(GraftPreferences.HIGHEST_INSTALLED_COUNTER_KEY, embeddedManifest.getCounter());
-            }
+        Long embeddedCounter = embeddedManifest == null ? null : embeddedManifest.getCounter();
+        if (embeddedCounter != null && embeddedCounter > preferences.getLong(GraftPreferences.HIGHEST_INSTALLED_COUNTER_KEY, 0)) {
+            editor.putLong(GraftPreferences.HIGHEST_INSTALLED_COUNTER_KEY, embeddedCounter);
         }
         editor.commit();
     }
@@ -122,7 +121,9 @@ public final class GraftPointer {
         if (manifest.getMinNativeBuild() > nativeBuild) {
             return false;
         }
-        return embeddedManifest == null || embeddedManifest.getCounter() <= manifest.getCounter();
+        Long embeddedCounter = embeddedManifest == null ? null : embeddedManifest.getCounter();
+        Long counter = manifest.getCounter();
+        return embeddedCounter == null || counter == null || embeddedCounter <= counter;
     }
 
     @Nullable

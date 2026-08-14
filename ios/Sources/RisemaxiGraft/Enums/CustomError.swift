@@ -14,6 +14,7 @@ public enum CustomError: Error {
     case manifestExpired
     case manifestMismatch
     case manifestUrlInvalid
+    case nativeBuildInvalid
     case notInitialized
     case publicKeyInvalid
     case publicKeyMissing
@@ -53,6 +54,8 @@ extension CustomError: LocalizedError {
             return NSLocalizedString("The manifest does not describe an acceptable release.", comment: "manifestMismatch")
         case .manifestUrlInvalid:
             return NSLocalizedString("The manifest URL is not on the configured server.", comment: "manifestUrlInvalid")
+        case .nativeBuildInvalid:
+            return NSLocalizedString("CFBundleVersion must be an integer to compare against minNativeBuild.", comment: "nativeBuildInvalid")
         case .notInitialized:
             return NSLocalizedString("Graft failed to initialize.", comment: "notInitialized")
         case .publicKeyInvalid:

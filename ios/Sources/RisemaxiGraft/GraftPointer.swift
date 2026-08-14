@@ -75,6 +75,7 @@ public enum GraftPointer {
     /// same decision is made here — but only for bundles the new binary genuinely cannot serve.
     private static func applyBinaryChangeRetention() {
         guard let nativeBuild = readNativeBuild() else {
+            CAPLog.print("[", GraftPlugin.tag, "] ", "CFBundleVersion is not an integer, so a staged bundle cannot be reconciled.")
             return
         }
         let preferences = GraftPreferences()
@@ -91,8 +92,8 @@ public enum GraftPointer {
            !isBundleRunnable(bundleId, nativeBuild: nativeBuild, embeddedManifest: embeddedManifest) {
             preferences.setLastKnownGoodBundleId(nil)
         }
-        if let embeddedManifest = embeddedManifest, embeddedManifest.counter > preferences.getHighestInstalledCounter() {
-            preferences.setHighestInstalledCounter(embeddedManifest.counter)
+        if let embeddedCounter = embeddedManifest?.counter, embeddedCounter > preferences.getHighestInstalledCounter() {
+            preferences.setHighestInstalledCounter(embeddedCounter)
         }
         preferences.setLastNativeBuild(nativeBuild)
     }
@@ -104,7 +105,10 @@ public enum GraftPointer {
         if manifest.minNativeBuild > nativeBuild {
             return false
         }
-        return embeddedManifest == nil || embeddedManifest!.counter <= manifest.counter
+        guard let embeddedCounter = embeddedManifest?.counter, let counter = manifest.counter else {
+            return true
+        }
+        return embeddedCounter <= counter
     }
 
     private static var applicationSupportDirectory: URL {

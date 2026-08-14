@@ -228,7 +228,7 @@ import Capacitor
         try verifyManifestIsAcceptable(manifest, release: release, channel: channel)
 
         try await install(manifest: manifest, manifestData: manifestData, manifestUrl: manifestUrl)
-        stageRelease(bundleId: manifest.id, counter: manifest.counter)
+        stageRelease(bundleId: manifest.id, counter: release.counter)
         return SyncResult(nextBundleId: manifest.id)
     }
 
@@ -272,11 +272,11 @@ import Capacitor
 
     private func verifyManifestIsAcceptable(_ manifest: Manifest, release: ChannelRelease, channel: String) throws {
         guard manifest.id == release.id,
-              manifest.counter == release.counter,
+              let counter = manifest.counter, counter == release.counter,
               manifest.minNativeBuild == release.minNativeBuild,
               manifest.channel == channel,
               manifest.minNativeBuild <= (try nativeBuild()),
-              manifest.counter > preferences.getHighestInstalledCounter() else {
+              counter > preferences.getHighestInstalledCounter() else {
             throw CustomError.manifestMismatch
         }
         let now = Int(Date().timeIntervalSince1970)
@@ -479,7 +479,7 @@ import Capacitor
 
     private func nativeBuild() throws -> Int {
         guard let nativeBuild = GraftPointer.readNativeBuild() else {
-            throw CustomError.manifestMismatch
+            throw CustomError.nativeBuildInvalid
         }
         return nativeBuild
     }

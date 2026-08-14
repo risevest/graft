@@ -453,9 +453,11 @@ public class Graft {
 
     private void verifyManifestIsAcceptable(@NonNull Manifest manifest, @NonNull ChannelRelease release, @NonNull String channel)
         throws Exception {
+        Long counter = manifest.getCounter();
         if (
             !manifest.getId().equals(release.getId()) ||
-            manifest.getCounter() != release.getCounter() ||
+            counter == null ||
+            counter != release.getCounter() ||
             manifest.getMinNativeBuild() != release.getMinNativeBuild() ||
             !channel.equals(manifest.getChannel())
         ) {
@@ -464,7 +466,7 @@ public class Graft {
         if (manifest.getMinNativeBuild() > getNativeBuild()) {
             throw new Exception(GraftPlugin.ERROR_MANIFEST_MISMATCH);
         }
-        if (manifest.getCounter() <= preferences.getHighestInstalledCounter()) {
+        if (counter <= preferences.getHighestInstalledCounter()) {
             throw new Exception(GraftPlugin.ERROR_MANIFEST_MISMATCH);
         }
         Long notBefore = manifest.getNotBefore();

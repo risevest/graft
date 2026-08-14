@@ -9,7 +9,10 @@ public struct Manifest: Decodable {
     /// Set only on a manifest published to a channel, where it stops a release for one channel being
     /// served on another. The manifest generated for the embedded bundle has no channel to name.
     let channel: String?
-    let counter: Int
+    /// The release ordering. Optional on the manifest generated for the embedded bundle: it is only
+    /// comparable when the consuming app counts releases and native builds on one scale, and a
+    /// consumer that cannot do that omits it rather than supplying a number that does not compare.
+    let counter: Int?
     let minNativeBuild: Int
     let notBefore: Int?
     let expiresAt: Int?
@@ -27,7 +30,7 @@ public struct Manifest: Decodable {
         }
         id = try container.decode(String.self, forKey: .id)
         channel = try container.decodeIfPresent(String.self, forKey: .channel)
-        counter = try container.decode(Int.self, forKey: .counter)
+        counter = try container.decodeIfPresent(Int.self, forKey: .counter)
         minNativeBuild = try container.decode(Int.self, forKey: .minNativeBuild)
         notBefore = try container.decodeIfPresent(Int.self, forKey: .notBefore)
         expiresAt = try container.decodeIfPresent(Int.self, forKey: .expiresAt)

@@ -28,7 +28,14 @@ public class Manifest {
     @Nullable
     private final String channel;
 
-    private final long counter;
+    /**
+     * The release ordering. Optional on the manifest generated for the embedded bundle: it is only
+     * comparable when the consuming app counts releases and native builds on one scale, and a
+     * consumer that cannot do that omits it rather than supplying a number that does not compare.
+     */
+    @Nullable
+    private final Long counter;
+
     private final long minNativeBuild;
 
     @Nullable
@@ -47,7 +54,7 @@ public class Manifest {
         }
         this.id = json.getString("id");
         this.channel = json.has("channel") ? json.getString("channel") : null;
-        this.counter = json.getLong("counter");
+        this.counter = json.has("counter") ? json.getLong("counter") : null;
         this.minNativeBuild = json.getLong("minNativeBuild");
         this.notBefore = json.has("notBefore") ? json.getLong("notBefore") : null;
         this.expiresAt = json.has("expiresAt") ? json.getLong("expiresAt") : null;
@@ -70,7 +77,8 @@ public class Manifest {
         return channel;
     }
 
-    public long getCounter() {
+    @Nullable
+    public Long getCounter() {
         return counter;
     }
 
