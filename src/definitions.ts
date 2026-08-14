@@ -300,6 +300,25 @@ export interface GraftPlugin {
   removeAllListeners(): Promise<void>;
 }
 
+/**
+ * What the plugin knows about the bundle it is serving, exposed to the page before any app code
+ * runs. Read it with `releaseIdentity()`.
+ */
+export interface ReleaseIdentity {
+  /**
+   * The build number of the binary — `versionCode` on Android, `CFBundleVersion` on iOS — or
+   * `null` when it is not an integer.
+   */
+  nativeBuild: number | null;
+  /**
+   * The identifier of the bundle being served: the release id for a bundle installed by `sync()`,
+   * the identifier it was staged under for one installed by `downloadBundle()`, or the `id` of the
+   * embedded manifest for the bundle built into the binary. `null` only when the binary embeds no
+   * manifest.
+   */
+  releaseId: string | null;
+}
+
 export interface DeleteBundleOptions {
   /**
    * The unique identifier of the bundle to delete.

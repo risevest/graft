@@ -142,6 +142,32 @@ embedded manifest**. Graft then skips the comparison and keeps a staged bundle w
 option: an embedded counter that always outranks your release counters makes every store release
 discard every staged bundle, which is the silent downgrade this rule exists to prevent.
 
+### Nothing that changes per release may live inside a hashed chunk
+
+Bundlers name chunks after a hash of their contents, and an update only reuses a file when its name
+already exists on the device. So a value that changes every release — a crash reporter's release
+identifier is the usual one — renames the chunk holding it, renames every chunk that references that
+one, and cascades. Measured on a real app: changing only the release identifier left **21 of 98
+files different, 5.8 MB of 9.5 MB**, though the identifier appeared in just two of them. The reuse
+this plugin relies on quietly stops working, and nothing tells you.
+
+Graft already knows which release it is serving, so read it from here instead of compiling one in:
+
+```ts
+import { releaseIdentity } from '@risemaxi/graft';
+
+const identity = releaseIdentity(); // { releaseId, nativeBuild } | null
+Sentry.init({ release: identity?.releaseId ?? 'unknown', /* … */ });
+```
+
+It is published to the page before any app code runs and resolves synchronously, so it can be passed
+straight to an `init` call. It returns `null` on the web and on a WebView too old to run a
+document-start script, so handle that case rather than dereferencing it — on Android the capability
+is feature-detected, and when it is missing the plugin logs why.
+
+If you must stamp something at build time, put it where the bundler does not hash it — `index.html`
+is regenerated every release anyway and costs a few kilobytes.
+
 ### Downgrades and native releases
 
 `counter` must increase. The device records the highest counter it has ever installed — at install

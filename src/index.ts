@@ -7,4 +7,5 @@ const Graft = registerPlugin<GraftPlugin>('Graft', {
 });
 
 export * from './definitions';
+export { releaseIdentity } from './identity';
 export { Graft };

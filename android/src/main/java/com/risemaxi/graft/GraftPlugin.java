@@ -3,6 +3,8 @@ package com.risemaxi.graft;
 import android.webkit.WebView;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
+import androidx.webkit.WebViewCompat;
+import androidx.webkit.WebViewFeature;
 import com.getcapacitor.JSObject;
 import com.getcapacitor.Logger;
 import com.getcapacitor.Plugin;
@@ -21,12 +23,14 @@ import com.risemaxi.graft.interfaces.EmptyCallback;
 import com.risemaxi.graft.interfaces.NonEmptyCallback;
 import com.risemaxi.graft.interfaces.Result;
 import java.net.SocketTimeoutException;
+import java.util.Collections;
 
 @CapacitorPlugin(name = "Graft")
 public class GraftPlugin extends Plugin {
 
     public static final String TAG = "Graft";
     public static final String SHARED_PREFERENCES_NAME = "RisemaxiGraft"; // DO NOT CHANGE
+    public static final String RELEASE_IDENTITY_KEY = "__graft__"; // must match src/identity.ts
 
     public static final String ERROR_BUNDLE_EXISTS = "bundle already exists.";
     public static final String ERROR_BUNDLE_ID_MISSING = "bundleId must be provided.";
@@ -63,8 +67,26 @@ public class GraftPlugin extends Plugin {
     public void load() {
         try {
             implementation = new Graft(getGraftConfig(), this);
+            publishReleaseIdentity(implementation);
         } catch (Exception exception) {
             Logger.error(TAG, exception.getMessage(), exception);
+        }
+    }
+
+    /**
+     * Publishes the running bundle's identity to the page before any of its code runs, so an app can
+     * read it synchronously instead of compiling a release identifier into its own bundle.
+     */
+    private void publishReleaseIdentity(@NonNull Graft graft) {
+        if (!WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) {
+            Logger.warn(TAG, "This WebView cannot run a document-start script, so releaseIdentity() will return null.");
+            return;
+        }
+        String script = "globalThis." + RELEASE_IDENTITY_KEY + " = " + graft.getReleaseIdentity() + ";";
+        try {
+            WebViewCompat.addDocumentStartJavaScript(getBridge().getWebView(), script, Collections.singleton(getBridge().getLocalUrl()));
+        } catch (Exception exception) {
+            Logger.error(TAG, "Failed to publish the release identity to the page.", exception);
         }
     }
 

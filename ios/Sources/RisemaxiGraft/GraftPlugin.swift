@@ -1,10 +1,12 @@
 import Foundation
 import Capacitor
+import WebKit
 
 @objc(GraftPlugin)
 public class GraftPlugin: CAPPlugin, CAPBridgedPlugin {
     public static let tag = "Graft"
     public static let userDefaultsPrefix = "RisemaxiGraft" // DO NOT CHANGE
+    public static let releaseIdentityKey = "__graft__" // must match src/identity.ts
 
     public let identifier = "GraftPlugin"
     public let jsName = "Graft"
@@ -39,6 +41,7 @@ public class GraftPlugin: CAPPlugin, CAPBridgedPlugin {
         let implementation = Graft(config: graftConfig(), plugin: self)
         self.implementation = implementation
 
+        publishReleaseIdentity(implementation)
         implementation.handleLoad()
 
         NotificationCenter.default.addObserver(
@@ -180,6 +183,17 @@ public class GraftPlugin: CAPPlugin, CAPBridgedPlugin {
 
     func notifyReloadedListeners() {
         notifyListeners(eventReloaded, data: JSObject(), retainUntilConsumed: true)
+    }
+
+    /// Publishes the running bundle's identity to the page before any of its code runs, so an app can
+    /// read it synchronously instead of compiling a release identifier into its own bundle.
+    private func publishReleaseIdentity(_ implementation: Graft) {
+        guard let controller = bridge?.webView?.configuration.userContentController else {
+            CAPLog.print("[", GraftPlugin.tag, "] ", "No WebView is available, so releaseIdentity() will return null.")
+            return
+        }
+        let script = "globalThis.\(GraftPlugin.releaseIdentityKey) = \(implementation.releaseIdentityJSON());"
+        controller.addUserScript(WKUserScript(source: script, injectionTime: .atDocumentStart, forMainFrameOnly: true))
     }
 
     @objc private func handleAppWillEnterForeground() {

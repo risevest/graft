@@ -10,6 +10,7 @@ import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.core.content.pm.PackageInfoCompat;
 import com.getcapacitor.Bridge;
+import com.getcapacitor.JSObject;
 import com.getcapacitor.Logger;
 import com.risemaxi.graft.classes.ChannelDocument;
 import com.risemaxi.graft.classes.ChannelRelease;
@@ -177,6 +178,28 @@ public class Graft {
 
     public void getDownloadedBundles(@NonNull NonEmptyCallback<GetDownloadedBundlesResult> callback) {
         callback.success(new GetDownloadedBundlesResult(getDownloadedBundleIds()));
+    }
+
+    /**
+     * @return What the page is told about the bundle it is running, so an app never has to compile a
+     *         release identifier into its own bundle.
+     */
+    @NonNull
+    public JSObject getReleaseIdentity() {
+        String releaseId = getCurrentBundleId();
+        if (releaseId == null) {
+            Manifest embeddedManifest = GraftPointer.readEmbeddedManifest(plugin.getContext());
+            releaseId = embeddedManifest == null ? null : embeddedManifest.getId();
+        }
+
+        JSObject identity = new JSObject();
+        identity.put("releaseId", releaseId == null ? JSONObject.NULL : releaseId);
+        try {
+            identity.put("nativeBuild", getNativeBuild());
+        } catch (PackageManager.NameNotFoundException exception) {
+            identity.put("nativeBuild", JSONObject.NULL);
+        }
+        return identity;
     }
 
     public void getInstallId(@NonNull NonEmptyCallback<GetInstallIdResult> callback) {

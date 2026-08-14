@@ -93,6 +93,21 @@ import Capacitor
         completion(GetDownloadedBundlesResult(bundleIds: getDownloadedBundleIds()), nil)
     }
 
+    /// What the page is told about the bundle it is running, as JSON, so an app never has to compile
+    /// a release identifier into its own bundle.
+    @objc public func releaseIdentityJSON() -> String {
+        let releaseId = getCurrentBundleId() ?? GraftPointer.readEmbeddedManifest()?.id
+        let identity: [String: Any] = [
+            "nativeBuild": GraftPointer.readNativeBuild() ?? NSNull(),
+            "releaseId": releaseId ?? NSNull()
+        ]
+        guard let data = try? JSONSerialization.data(withJSONObject: identity),
+              let json = String(data: data, encoding: .utf8) else {
+            return "null"
+        }
+        return json
+    }
+
     @objc public func getInstallId(completion: @escaping (Result?, Error?) -> Void) {
         let installId = preferences.getInstallId()
         completion(GetInstallIdResult(installId: installId, bucket: ReleaseSelector.bucket(for: installId)), nil)
