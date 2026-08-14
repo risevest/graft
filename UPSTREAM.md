@@ -53,15 +53,37 @@ fails as `Unable to resolve module dependency`. So consumers write `import Risem
 matters for plugins the app touches from its own Swift code; the other Capacitor plugins are reached
 from JS and never imported.
 
-Not vendored: the Capawesome Cloud client and its API surface, `example/`, `ios/Plugin.xcodeproj`
-(SwiftPM covers the build), and the upstream test scaffolding, which does not compile.
+Not vendored: `example/`, `ios/Plugin.xcodeproj` (SwiftPM covers the build), and the upstream test
+scaffolding, which does not compile.
+
+## Divergence
+
+What upstream still recognises: the bundle store and its directory layout, `ready()`, the rollback
+watchdog, the blocklist, retention, and the reload path.
+
+What is ours, and shares no code with upstream:
+
+| | Upstream | Graft |
+|---|---|---|
+| Update source | Capawesome Cloud (`appId`, `serverDomain`, `customId`, device headers) | The channel document in `README.md` (`serverUrl`) |
+| Which release | Whatever the server hands back for this device | Chosen on-device from `minNativeBuild`, `counter` and a local rollout bucket |
+| Signing | Optional, per file, signature supplied by response headers | Required, once over the manifest, verified before any asset is fetched |
+| File integrity | `X-Checksum`/`X-Signature` headers; manifest checksums used only for diffing | Every installed file checked against the signed manifest |
+| Downgrades | Not prevented | Monotonic `counter` floor, recorded at install |
+| Binary change | Pointer always discarded | Kept when `minNativeBuild` allows and the embedded counter is not higher |
+
+Removed from the API: `fetchChannels`, `fetchLatestBundle`, `getConfig`, `setConfig`, `resetConfig`,
+`getCustomId`, `setCustomId`, `getBundles`, `getDeviceId` (replaced by `getInstallId`), and the
+`manifest` artifact type of `downloadBundle`, which is now a ZIP-only manual staging path.
 
 ## Rebasing onto a newer upstream
 
 1. Fetch the upstream range: `git log --oneline <pinned>..<target> -- packages/live-update`.
-2. Ignore changes confined to the cloud client, `example/`, and the docs site.
+2. Ignore changes confined to the cloud client, `example/`, and the docs site — and note that this
+   now also covers `sync`, `downloadBundle`'s manifest path, and everything under verification,
+   since none of that is shared code any more.
 3. Apply the rest by hand against the rename map above. The god classes — `Graft.java` and
-   `Graft.swift` — are where conflicts land.
+   `Graft.swift` — are where conflicts land, and only their lifecycle halves are still comparable.
 4. Re-run `bun run verify`, then re-run the device matrix in the consuming app.
 5. Update the fork point table above.
 
