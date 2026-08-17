@@ -254,7 +254,7 @@ public class Graft {
         String previousBundleId = preferences.getPreviousBundleId();
         // Block the rolled back bundle if enabled
         if (config.getAutoBlockRolledBackBundles() && rollbackPerformed && previousBundleId != null) {
-            addBlockedBundleId(previousBundleId);
+            recordFailure(previousBundleId);
         }
         // Return the result
         callback.success(new ReadyResult(currentBundleId, previousBundleId, rollbackPerformed));
@@ -263,6 +263,9 @@ public class Graft {
         // A bundle that reaches this point booted, so it is the one to roll back to next time
         if (!rollbackPerformed) {
             preferences.setLastKnownGoodBundleId(currentBundleId);
+            if (currentBundleId != null && currentBundleId.equals(preferences.getLastFailedBundleId())) {
+                preferences.setLastFailed(null, 0);
+            }
         }
         // Reset the rollback flag
         rollbackPerformed = false;
@@ -961,6 +964,22 @@ public class Graft {
             return new LinkedHashSet<>();
         }
         return new LinkedHashSet<>(Arrays.asList(blockedIds.split(",")));
+    }
+
+    /**
+     * Blocks a bundle only once it has failed to report ready twice running. One failure is as likely
+     * to mean a slow cold start as a broken bundle, and blocking is permanent — a device that blocks a
+     * good release never receives it again.
+     */
+    private void recordFailure(@NonNull String bundleId) {
+        int failures = bundleId.equals(preferences.getLastFailedBundleId()) ? preferences.getLastFailedCount() + 1 : 1;
+        if (failures >= 2) {
+            preferences.setLastFailed(null, 0);
+            addBlockedBundleId(bundleId);
+            return;
+        }
+        preferences.setLastFailed(bundleId, failures);
+        Logger.debug(GraftPlugin.TAG, "Bundle did not report ready: " + bundleId + ". It is blocked if it fails again.");
     }
 
     private void addBlockedBundleId(@NonNull String bundleId) {

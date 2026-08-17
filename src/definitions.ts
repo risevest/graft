@@ -8,9 +8,11 @@ declare module '@capacitor/cli' {
       /**
        * Whether or not to automatically block bundles that have been rolled back.
        *
-       * When enabled, the plugin will automatically block bundles that caused a rollback
-       * (up to 100 bundles). When the limit is reached, the oldest blocked bundle is unblocked.
-       * Blocked bundles will be skipped in future sync operations.
+       * A bundle is blocked once it has failed to report `ready()` twice running, not on the first
+       * failure: a single miss is as likely to be a slow cold start as a broken bundle, and blocking
+       * is permanent — a device that blocks a good release never receives it again. Up to 100
+       * bundles are held; the oldest is unblocked when the limit is reached. Blocked bundles are
+       * skipped by `sync()`.
        *
        * **Attention**: This option has no effect if `readyTimeout` is set to `0`.
        *

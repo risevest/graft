@@ -157,7 +157,7 @@ import Capacitor
         let previousBundleId = preferences.getPreviousBundleId()
         // Block the rolled back bundle if enabled
         if config.autoBlockRolledBackBundles, rollbackPerformed, let previousBundleId = previousBundleId {
-            addBlockedBundleId(previousBundleId)
+            recordFailure(previousBundleId)
         }
         // Return the result
         completion(ReadyResult(currentBundleId: currentBundleId, previousBundleId: previousBundleId, rollback: rollbackPerformed), nil)
@@ -166,6 +166,9 @@ import Capacitor
         // A bundle that reaches this point booted, so it is the one to roll back to next time
         if !rollbackPerformed {
             preferences.setLastKnownGoodBundleId(currentBundleId)
+            if let currentBundleId = currentBundleId, currentBundleId == preferences.getLastFailedBundleId() {
+                preferences.setLastFailed(nil, count: 0)
+            }
         }
         // Reset the rollback flag
         rollbackPerformed = false
@@ -597,6 +600,20 @@ import Capacitor
             return []
         }
         return Set(blockedIds.split(separator: ",").map(String.init))
+    }
+
+    /// Blocks a bundle only once it has failed to report ready twice running. One failure is as likely
+    /// to mean a slow cold start as a broken bundle, and blocking is permanent — a device that blocks a
+    /// good release never receives it again.
+    private func recordFailure(_ bundleId: String) {
+        let failures = bundleId == preferences.getLastFailedBundleId() ? preferences.getLastFailedCount() + 1 : 1
+        if failures >= 2 {
+            preferences.setLastFailed(nil, count: 0)
+            addBlockedBundleId(bundleId)
+            return
+        }
+        preferences.setLastFailed(bundleId, count: failures)
+        CAPLog.print("[", GraftPlugin.tag, "] ", "Bundle did not report ready: \(bundleId). It is blocked if it fails again.")
     }
 
     private func addBlockedBundleId(_ bundleId: String) {

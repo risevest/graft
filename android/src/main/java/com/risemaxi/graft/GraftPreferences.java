@@ -13,6 +13,8 @@ public class GraftPreferences {
     static final String CHANNEL_KEY = "channel";
     static final String HIGHEST_INSTALLED_COUNTER_KEY = "highestInstalledCounter";
     static final String INSTALL_ID_KEY = "installId";
+    static final String LAST_FAILED_BUNDLE_ID_KEY = "lastFailedBundleId";
+    static final String LAST_FAILED_COUNT_KEY = "lastFailedCount";
     static final String LAST_KNOWN_GOOD_BUNDLE_ID_KEY = "lastKnownGoodBundleId";
     static final String LAST_NATIVE_BUILD_KEY = "lastNativeBuild";
     static final String PREVIOUS_BUNDLE_ID_KEY = "previousBundleId";
@@ -54,6 +56,25 @@ public class GraftPreferences {
             preferences.edit().putString(INSTALL_ID_KEY, installId).apply();
         }
         return installId;
+    }
+
+    @Nullable
+    public String getLastFailedBundleId() {
+        return preferences.getString(LAST_FAILED_BUNDLE_ID_KEY, null);
+    }
+
+    public int getLastFailedCount() {
+        return preferences.getInt(LAST_FAILED_COUNT_KEY, 0);
+    }
+
+    public void setLastFailed(@Nullable String bundleId, int count) {
+        SharedPreferences.Editor editor = preferences.edit();
+        if (bundleId == null) {
+            editor.remove(LAST_FAILED_BUNDLE_ID_KEY).remove(LAST_FAILED_COUNT_KEY);
+        } else {
+            editor.putString(LAST_FAILED_BUNDLE_ID_KEY, bundleId).putInt(LAST_FAILED_COUNT_KEY, count);
+        }
+        editor.apply();
     }
 
     @Nullable

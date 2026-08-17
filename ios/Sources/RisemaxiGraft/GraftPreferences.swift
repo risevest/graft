@@ -5,6 +5,8 @@ public class GraftPreferences: NSObject {
     private let channelKey = "channel"
     private let highestInstalledCounterKey = "highestInstalledCounter"
     private let installIdKey = "installId"
+    private let lastFailedBundleIdKey = "lastFailedBundleId"
+    private let lastFailedCountKey = "lastFailedCount"
     private let lastKnownGoodBundleIdKey = "lastKnownGoodBundleId"
     private let lastNativeBuildKey = "lastNativeBuild"
     private let previousBundleIdKey = "previousBundleId"
@@ -30,6 +32,23 @@ public class GraftPreferences: NSObject {
         let installId = UUID().uuidString.lowercased()
         UserDefaults.standard.set(installId, forKey: key)
         return installId
+    }
+
+    public func getLastFailedBundleId() -> String? {
+        return UserDefaults.standard.string(forKey: applyPrefix(to: lastFailedBundleIdKey))
+    }
+
+    public func getLastFailedCount() -> Int {
+        return UserDefaults.standard.integer(forKey: applyPrefix(to: lastFailedCountKey))
+    }
+
+    public func setLastFailed(_ bundleId: String?, count: Int) {
+        setString(bundleId, forKey: lastFailedBundleIdKey)
+        if bundleId == nil {
+            UserDefaults.standard.removeObject(forKey: applyPrefix(to: lastFailedCountKey))
+        } else {
+            UserDefaults.standard.set(count, forKey: applyPrefix(to: lastFailedCountKey))
+        }
     }
 
     public func getLastKnownGoodBundleId() -> String? {
