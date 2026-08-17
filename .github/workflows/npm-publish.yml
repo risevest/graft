@@ -20,12 +20,6 @@ jobs:
       - name: 🍞 Setup Bun
         uses: oven-sh/setup-bun@v2
 
-      - uses: actions/setup-node@v6
-        with:
-          node-version: "24.x"
-          registry-url: "https://registry.npmjs.org"
-          package-manager-cache: false
-
       - name: 📦 Install packages and prebuild
         run: bun install --frozen-lockfile
         shell: bash
