@@ -3,27 +3,18 @@ import { WebPlugin } from '@capacitor/core';
 import type {
   DeleteBundleOptions,
   DownloadBundleOptions,
-  FetchChannelsResult,
-  FetchLatestBundleResult,
   GetBlockedBundlesResult,
-  GetBundleResult,
-  GetBundlesResult,
   GetChannelResult,
-  GetConfigResult,
   GetCurrentBundleResult,
-  GetCustomIdResult,
-  GetDeviceIdResult,
   GetDownloadedBundlesResult,
+  GetInstallIdResult,
   GetNextBundleResult,
   GetVersionCodeResult,
   GetVersionNameResult,
-  IsSyncingResult,
   GraftPlugin,
+  IsSyncingResult,
   ReadyResult,
-  SetBundleOptions,
   SetChannelOptions,
-  SetConfigOptions,
-  SetCustomIdOptions,
   SetNextBundleOptions,
   SyncResult,
 } from './definitions';
@@ -41,27 +32,7 @@ export class GraftWeb extends WebPlugin implements GraftPlugin {
     this.throwUnimplementedError();
   }
 
-  public async fetchChannels(): Promise<FetchChannelsResult> {
-    this.throwUnimplementedError();
-  }
-
-  public async fetchLatestBundle(): Promise<FetchLatestBundleResult> {
-    this.throwUnimplementedError();
-  }
-
   public async getBlockedBundles(): Promise<GetBlockedBundlesResult> {
-    this.throwUnimplementedError();
-  }
-
-  public async getBundle(): Promise<GetBundleResult> {
-    this.throwUnimplementedError();
-  }
-
-  public async getBundles(): Promise<GetBundlesResult> {
-    this.throwUnimplementedError();
-  }
-
-  public async getDownloadedBundles(): Promise<GetDownloadedBundlesResult> {
     this.throwUnimplementedError();
   }
 
@@ -69,19 +40,15 @@ export class GraftWeb extends WebPlugin implements GraftPlugin {
     this.throwUnimplementedError();
   }
 
-  public async getConfig(): Promise<GetConfigResult> {
-    this.throwUnimplementedError();
-  }
-
   public async getCurrentBundle(): Promise<GetCurrentBundleResult> {
     this.throwUnimplementedError();
   }
 
-  public async getCustomId(): Promise<GetCustomIdResult> {
+  public async getDownloadedBundles(): Promise<GetDownloadedBundlesResult> {
     this.throwUnimplementedError();
   }
 
-  public async getDeviceId(): Promise<GetDeviceIdResult> {
+  public async getInstallId(): Promise<GetInstallIdResult> {
     this.throwUnimplementedError();
   }
 
@@ -113,23 +80,7 @@ export class GraftWeb extends WebPlugin implements GraftPlugin {
     this.throwUnimplementedError();
   }
 
-  public async resetConfig(): Promise<void> {
-    this.throwUnimplementedError();
-  }
-
-  public async setBundle(_options: SetBundleOptions): Promise<void> {
-    this.throwUnimplementedError();
-  }
-
   public async setChannel(_options: SetChannelOptions): Promise<void> {
-    this.throwUnimplementedError();
-  }
-
-  public async setConfig(_options: SetConfigOptions): Promise<void> {
-    this.throwUnimplementedError();
-  }
-
-  public async setCustomId(_options: SetCustomIdOptions): Promise<void> {
     this.throwUnimplementedError();
   }
 

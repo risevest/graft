@@ -2,12 +2,8 @@ package com.risemaxi.graft;
 
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
-import java.security.Key;
 
 public class GraftConfig {
-
-    @Nullable
-    private String appId = null;
 
     private boolean autoBlockRolledBackBundles = true;
 
@@ -25,12 +21,9 @@ public class GraftConfig {
     private String publicKey = null;
 
     private int readyTimeout = 10000;
-    private String serverDomain = "api.cloud.capawesome.io";
 
     @Nullable
-    public String getAppId() {
-        return appId;
-    }
+    private String serverUrl = null;
 
     public boolean getAutoBlockRolledBackBundles() {
         return autoBlockRolledBackBundles;
@@ -63,12 +56,9 @@ public class GraftConfig {
         return readyTimeout;
     }
 
-    public String getServerDomain() {
-        return serverDomain;
-    }
-
-    public void setAppId(@Nullable String appId) {
-        this.appId = appId;
+    @Nullable
+    public String getServerUrl() {
+        return serverUrl;
     }
 
     public void setAutoBlockRolledBackBundles(boolean autoBlockRolledBackBundles) {
@@ -99,7 +89,7 @@ public class GraftConfig {
         this.readyTimeout = readyTimeout;
     }
 
-    public void setServerDomain(String serverDomain) {
-        this.serverDomain = serverDomain;
+    public void setServerUrl(@Nullable String serverUrl) {
+        this.serverUrl = serverUrl;
     }
 }

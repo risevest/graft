@@ -3,6 +3,8 @@ package com.risemaxi.graft;
 import android.webkit.WebView;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
+import androidx.webkit.WebViewCompat;
+import androidx.webkit.WebViewFeature;
 import com.getcapacitor.JSObject;
 import com.getcapacitor.Logger;
 import com.getcapacitor.Plugin;
@@ -14,53 +16,48 @@ import com.risemaxi.graft.classes.events.DownloadBundleProgressEvent;
 import com.risemaxi.graft.classes.events.NextBundleSetEvent;
 import com.risemaxi.graft.classes.options.DeleteBundleOptions;
 import com.risemaxi.graft.classes.options.DownloadBundleOptions;
-import com.risemaxi.graft.classes.options.FetchChannelsOptions;
-import com.risemaxi.graft.classes.options.FetchLatestBundleOptions;
 import com.risemaxi.graft.classes.options.SetChannelOptions;
-import com.risemaxi.graft.classes.options.SetConfigOptions;
-import com.risemaxi.graft.classes.options.SetCustomIdOptions;
 import com.risemaxi.graft.classes.options.SetNextBundleOptions;
 import com.risemaxi.graft.classes.options.SyncOptions;
-import com.risemaxi.graft.classes.results.FetchChannelsResult;
-import com.risemaxi.graft.classes.results.FetchLatestBundleResult;
-import com.risemaxi.graft.classes.results.GetBlockedBundlesResult;
-import com.risemaxi.graft.classes.results.GetConfigResult;
-import com.risemaxi.graft.classes.results.GetCurrentBundleResult;
-import com.risemaxi.graft.classes.results.GetDownloadedBundlesResult;
-import com.risemaxi.graft.classes.results.GetNextBundleResult;
-import com.risemaxi.graft.classes.results.IsSyncingResult;
 import com.risemaxi.graft.interfaces.EmptyCallback;
 import com.risemaxi.graft.interfaces.NonEmptyCallback;
 import com.risemaxi.graft.interfaces.Result;
+import java.net.SocketTimeoutException;
+import java.util.Collections;
 
 @CapacitorPlugin(name = "Graft")
 public class GraftPlugin extends Plugin {
 
     public static final String TAG = "Graft";
-    public static final String VERSION = "8.3.0";
     public static final String SHARED_PREFERENCES_NAME = "RisemaxiGraft"; // DO NOT CHANGE
-    public static final String ERROR_APP_ID_MISSING = "appId must be configured.";
+    public static final String RELEASE_IDENTITY_KEY = "__graft__"; // must match src/identity.ts
+
     public static final String ERROR_BUNDLE_EXISTS = "bundle already exists.";
     public static final String ERROR_BUNDLE_ID_MISSING = "bundleId must be provided.";
     public static final String ERROR_BUNDLE_INDEX_HTML_MISSING = "The bundle does not contain an index.html file.";
     public static final String ERROR_BUNDLE_NOT_FOUND = "bundle not found.";
-    public static final String ERROR_CHECKSUM_CALCULATION_FAILED = "Failed to calculate checksum.";
+    public static final String ERROR_CHANNEL_MISSING = "channel must be configured.";
+    public static final String ERROR_CHECKSUM_MISSING = "checksum must be provided.";
     public static final String ERROR_CHECKSUM_MISMATCH = "Checksum mismatch.";
-    public static final String ERROR_CUSTOM_ID_MISSING = "customId must be provided.";
     public static final String ERROR_DOWNLOAD_FAILED = "Bundle could not be downloaded.";
     public static final String ERROR_HTTP_TIMEOUT = "Request timed out.";
-    public static final String ERROR_URL_MISSING = "url must be provided.";
-    public static final String ERROR_SIGNATURE_VERIFICATION_FAILED = "Signature verification failed.";
+    public static final String ERROR_INSTALL_FAILED = "Bundle could not be installed.";
+    public static final String ERROR_MANIFEST_EXPIRED = "The manifest is not valid at the current time.";
+    public static final String ERROR_MANIFEST_MISMATCH = "The manifest does not describe an acceptable release.";
+    public static final String ERROR_MANIFEST_URL_INVALID = "The manifest URL is not on the configured server.";
+    public static final String ERROR_NOT_INITIALIZED = "Graft failed to initialize.";
     public static final String ERROR_PUBLIC_KEY_INVALID = "Invalid public key.";
-    public static final String ERROR_SIGNATURE_MISSING = "Bundle does not contain a signature.";
+    public static final String ERROR_PUBLIC_KEY_MISSING = "publicKey must be configured.";
+    public static final String ERROR_SERVER_URL_INVALID = "Invalid serverUrl.";
+    public static final String ERROR_SERVER_URL_MISSING = "serverUrl must be configured.";
+    public static final String ERROR_SIGNATURE_VERIFICATION_FAILED = "Signature verification failed.";
     public static final String ERROR_SYNC_IN_PROGRESS = "Sync is already in progress.";
     public static final String ERROR_UNKNOWN_ERROR = "An unknown error has occurred.";
+    public static final String ERROR_URL_MISSING = "url must be provided.";
+
     public static final String EVENT_DOWNLOAD_BUNDLE_PROGRESS = "downloadBundleProgress";
     public static final String EVENT_NEXT_BUNDLE_SET = "nextBundleSet";
     public static final String EVENT_RELOADED = "reloaded";
-
-    @Nullable
-    private GraftConfig config;
 
     @Nullable
     private Graft implementation;
@@ -69,10 +66,27 @@ public class GraftPlugin extends Plugin {
 
     public void load() {
         try {
-            config = getGraftConfig();
-            implementation = new Graft(config, this);
+            implementation = new Graft(getGraftConfig(), this);
+            publishReleaseIdentity(implementation);
         } catch (Exception exception) {
             Logger.error(TAG, exception.getMessage(), exception);
+        }
+    }
+
+    /**
+     * Publishes the running bundle's identity to the page before any of its code runs, so an app can
+     * read it synchronously instead of compiling a release identifier into its own bundle.
+     */
+    private void publishReleaseIdentity(@NonNull Graft graft) {
+        if (!WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) {
+            Logger.warn(TAG, "This WebView cannot run a document-start script, so releaseIdentity() will return null.");
+            return;
+        }
+        try {
+            String script = "globalThis." + RELEASE_IDENTITY_KEY + " = " + graft.getReleaseIdentity() + ";";
+            WebViewCompat.addDocumentStartJavaScript(getBridge().getWebView(), script, Collections.singleton(getBridge().getLocalUrl()));
+        } catch (Exception exception) {
+            Logger.error(TAG, "Failed to publish the release identity to the page.", exception);
         }
     }
 
@@ -80,11 +94,9 @@ public class GraftPlugin extends Plugin {
     protected void handleOnResume() {
         super.handleOnResume();
         try {
-            // Notify the implementation that the app has resumed
             if (implementation != null) {
                 implementation.handleOnResume();
             }
-            // Register WebView listener to trigger auto-update when page is loaded
             // Important: For some reason, the listener CANNOT be registered in the load() method
             // or constructor, it MUST be done here in onResume().
             if (!webViewListenerRegistered) {
@@ -107,9 +119,13 @@ public class GraftPlugin extends Plugin {
 
     @PluginMethod
     public void clearBlockedBundles(PluginCall call) {
+        Graft graft = requireImplementation(call);
+        if (graft == null) {
+            return;
+        }
         try {
-            implementation.clearBlockedBundles();
-            resolveCall(call);
+            graft.clearBlockedBundles();
+            call.resolve();
         } catch (Exception exception) {
             rejectCall(call, exception);
         }
@@ -117,27 +133,17 @@ public class GraftPlugin extends Plugin {
 
     @PluginMethod
     public void deleteBundle(PluginCall call) {
+        Graft graft = requireImplementation(call);
+        if (graft == null) {
+            return;
+        }
         try {
             String bundleId = call.getString("bundleId");
             if (bundleId == null) {
                 call.reject(ERROR_BUNDLE_ID_MISSING);
                 return;
             }
-
-            DeleteBundleOptions options = new DeleteBundleOptions(bundleId);
-            EmptyCallback callback = new EmptyCallback() {
-                @Override
-                public void success() {
-                    resolveCall(call);
-                }
-
-                @Override
-                public void error(Exception exception) {
-                    rejectCall(call, exception);
-                }
-            };
-
-            implementation.deleteBundle(options, callback);
+            graft.deleteBundle(new DeleteBundleOptions(bundleId), emptyCallback(call));
         } catch (Exception exception) {
             rejectCall(call, exception);
         }
@@ -145,91 +151,27 @@ public class GraftPlugin extends Plugin {
 
     @PluginMethod
     public void downloadBundle(PluginCall call) {
+        Graft graft = requireImplementation(call);
+        if (graft == null) {
+            return;
+        }
         try {
-            String artifactType = call.getString("artifactType", "zip");
             String bundleId = call.getString("bundleId");
             if (bundleId == null) {
                 call.reject(ERROR_BUNDLE_ID_MISSING);
                 return;
             }
             String checksum = call.getString("checksum");
-            String signature = call.getString("signature");
+            if (checksum == null) {
+                call.reject(ERROR_CHECKSUM_MISSING);
+                return;
+            }
             String url = call.getString("url");
             if (url == null) {
                 call.reject(ERROR_URL_MISSING);
                 return;
             }
-
-            DownloadBundleOptions options = new DownloadBundleOptions(artifactType, bundleId, checksum, signature, url);
-            EmptyCallback callback = new EmptyCallback() {
-                @Override
-                public void success() {
-                    resolveCall(call);
-                }
-
-                @Override
-                public void error(Exception exception) {
-                    rejectCall(call, exception);
-                }
-            };
-
-            implementation.downloadBundle(options, callback);
-        } catch (Exception exception) {
-            rejectCall(call, exception);
-        }
-    }
-
-    @PluginMethod
-    public void fetchChannels(PluginCall call) {
-        try {
-            String appId = config.getAppId();
-            if (appId == null || appId.isEmpty()) {
-                call.reject(ERROR_APP_ID_MISSING);
-                return;
-            }
-
-            FetchChannelsOptions options = new FetchChannelsOptions(call);
-            NonEmptyCallback<FetchChannelsResult> callback = new NonEmptyCallback<>() {
-                @Override
-                public void success(FetchChannelsResult result) {
-                    resolveCall(call, result.toJSObject());
-                }
-
-                @Override
-                public void error(Exception exception) {
-                    rejectCall(call, exception);
-                }
-            };
-
-            implementation.fetchChannels(options, callback);
-        } catch (Exception exception) {
-            rejectCall(call, exception);
-        }
-    }
-
-    @PluginMethod
-    public void fetchLatestBundle(PluginCall call) {
-        try {
-            String appId = config.getAppId();
-            if (appId == null || appId.isEmpty()) {
-                call.reject(ERROR_APP_ID_MISSING);
-                return;
-            }
-
-            FetchLatestBundleOptions options = new FetchLatestBundleOptions(call);
-            NonEmptyCallback<FetchLatestBundleResult> callback = new NonEmptyCallback<>() {
-                @Override
-                public void success(FetchLatestBundleResult result) {
-                    resolveCall(call, result.toJSObject());
-                }
-
-                @Override
-                public void error(Exception exception) {
-                    rejectCall(call, exception);
-                }
-            };
-
-            implementation.fetchLatestBundle(options, callback);
+            graft.downloadBundle(new DownloadBundleOptions(bundleId, checksum, url), emptyCallback(call));
         } catch (Exception exception) {
             rejectCall(call, exception);
         }
@@ -237,64 +179,12 @@ public class GraftPlugin extends Plugin {
 
     @PluginMethod
     public void getBlockedBundles(PluginCall call) {
-        try {
-            NonEmptyCallback<GetBlockedBundlesResult> callback = new NonEmptyCallback<>() {
-                @Override
-                public void success(GetBlockedBundlesResult result) {
-                    resolveCall(call, result.toJSObject());
-                }
-
-                @Override
-                public void error(Exception exception) {
-                    rejectCall(call, exception);
-                }
-            };
-
-            assert implementation != null;
-            implementation.getBlockedBundles(callback);
-        } catch (Exception exception) {
-            rejectCall(call, exception);
+        Graft graft = requireImplementation(call);
+        if (graft == null) {
+            return;
         }
-    }
-
-    @PluginMethod
-    public void getBundles(PluginCall call) {
         try {
-            NonEmptyCallback<Result> callback = new NonEmptyCallback<>() {
-                @Override
-                public void success(Result result) {
-                    resolveCall(call, result.toJSObject());
-                }
-
-                @Override
-                public void error(Exception exception) {
-                    rejectCall(call, exception);
-                }
-            };
-
-            implementation.getBundles(callback);
-        } catch (Exception exception) {
-            rejectCall(call, exception);
-        }
-    }
-
-    @PluginMethod
-    public void getDownloadedBundles(PluginCall call) {
-        try {
-            NonEmptyCallback<GetDownloadedBundlesResult> callback = new NonEmptyCallback<>() {
-                @Override
-                public void success(GetDownloadedBundlesResult result) {
-                    resolveCall(call, result.toJSObject());
-                }
-
-                @Override
-                public void error(Exception exception) {
-                    rejectCall(call, exception);
-                }
-            };
-
-            assert implementation != null;
-            implementation.getDownloadedBundles(callback);
+            graft.getBlockedBundles(resultCallback(call));
         } catch (Exception exception) {
             rejectCall(call, exception);
         }
@@ -302,42 +192,12 @@ public class GraftPlugin extends Plugin {
 
     @PluginMethod
     public void getChannel(PluginCall call) {
-        try {
-            NonEmptyCallback<Result> callback = new NonEmptyCallback<>() {
-                @Override
-                public void success(Result result) {
-                    resolveCall(call, result.toJSObject());
-                }
-
-                @Override
-                public void error(Exception exception) {
-                    rejectCall(call, exception);
-                }
-            };
-
-            implementation.getChannel(callback);
-        } catch (Exception exception) {
-            rejectCall(call, exception);
+        Graft graft = requireImplementation(call);
+        if (graft == null) {
+            return;
         }
-    }
-
-    @PluginMethod
-    public void getConfig(PluginCall call) {
         try {
-            NonEmptyCallback<GetConfigResult> callback = new NonEmptyCallback<>() {
-                @Override
-                public void success(GetConfigResult result) {
-                    resolveCall(call, result.toJSObject());
-                }
-
-                @Override
-                public void error(Exception exception) {
-                    rejectCall(call, exception);
-                }
-            };
-
-            assert implementation != null;
-            implementation.getConfig(callback);
+            graft.getChannel(resultCallback(call));
         } catch (Exception exception) {
             rejectCall(call, exception);
         }
@@ -345,63 +205,38 @@ public class GraftPlugin extends Plugin {
 
     @PluginMethod
     public void getCurrentBundle(PluginCall call) {
+        Graft graft = requireImplementation(call);
+        if (graft == null) {
+            return;
+        }
         try {
-            NonEmptyCallback<GetCurrentBundleResult> callback = new NonEmptyCallback<>() {
-                @Override
-                public void success(GetCurrentBundleResult result) {
-                    resolveCall(call, result.toJSObject());
-                }
-
-                @Override
-                public void error(Exception exception) {
-                    rejectCall(call, exception);
-                }
-            };
-
-            assert implementation != null;
-            implementation.getCurrentBundle(callback);
+            graft.getCurrentBundle(resultCallback(call));
         } catch (Exception exception) {
             rejectCall(call, exception);
         }
     }
 
     @PluginMethod
-    public void getCustomId(PluginCall call) {
+    public void getDownloadedBundles(PluginCall call) {
+        Graft graft = requireImplementation(call);
+        if (graft == null) {
+            return;
+        }
         try {
-            NonEmptyCallback<Result> callback = new NonEmptyCallback<>() {
-                @Override
-                public void success(Result result) {
-                    resolveCall(call, result.toJSObject());
-                }
-
-                @Override
-                public void error(Exception exception) {
-                    rejectCall(call, exception);
-                }
-            };
-
-            implementation.getCustomId(callback);
+            graft.getDownloadedBundles(resultCallback(call));
         } catch (Exception exception) {
             rejectCall(call, exception);
         }
     }
 
     @PluginMethod
-    public void getDeviceId(PluginCall call) {
+    public void getInstallId(PluginCall call) {
+        Graft graft = requireImplementation(call);
+        if (graft == null) {
+            return;
+        }
         try {
-            NonEmptyCallback<Result> callback = new NonEmptyCallback<>() {
-                @Override
-                public void success(Result result) {
-                    resolveCall(call, result.toJSObject());
-                }
-
-                @Override
-                public void error(Exception exception) {
-                    rejectCall(call, exception);
-                }
-            };
-
-            implementation.getDeviceId(callback);
+            graft.getInstallId(resultCallback(call));
         } catch (Exception exception) {
             rejectCall(call, exception);
         }
@@ -409,21 +244,12 @@ public class GraftPlugin extends Plugin {
 
     @PluginMethod
     public void getNextBundle(PluginCall call) {
+        Graft graft = requireImplementation(call);
+        if (graft == null) {
+            return;
+        }
         try {
-            NonEmptyCallback<GetNextBundleResult> callback = new NonEmptyCallback<>() {
-                @Override
-                public void success(GetNextBundleResult result) {
-                    resolveCall(call, result.toJSObject());
-                }
-
-                @Override
-                public void error(Exception exception) {
-                    rejectCall(call, exception);
-                }
-            };
-
-            assert implementation != null;
-            implementation.getNextBundle(callback);
+            graft.getNextBundle(resultCallback(call));
         } catch (Exception exception) {
             rejectCall(call, exception);
         }
@@ -431,20 +257,12 @@ public class GraftPlugin extends Plugin {
 
     @PluginMethod
     public void getVersionCode(PluginCall call) {
+        Graft graft = requireImplementation(call);
+        if (graft == null) {
+            return;
+        }
         try {
-            NonEmptyCallback<Result> callback = new NonEmptyCallback<>() {
-                @Override
-                public void success(Result result) {
-                    resolveCall(call, result.toJSObject());
-                }
-
-                @Override
-                public void error(Exception exception) {
-                    rejectCall(call, exception);
-                }
-            };
-
-            implementation.getVersionCode(callback);
+            graft.getVersionCode(resultCallback(call));
         } catch (Exception exception) {
             rejectCall(call, exception);
         }
@@ -452,20 +270,12 @@ public class GraftPlugin extends Plugin {
 
     @PluginMethod
     public void getVersionName(PluginCall call) {
+        Graft graft = requireImplementation(call);
+        if (graft == null) {
+            return;
+        }
         try {
-            NonEmptyCallback<Result> callback = new NonEmptyCallback<>() {
-                @Override
-                public void success(Result result) {
-                    resolveCall(call, result.toJSObject());
-                }
-
-                @Override
-                public void error(Exception exception) {
-                    rejectCall(call, exception);
-                }
-            };
-
-            implementation.getVersionName(callback);
+            graft.getVersionName(resultCallback(call));
         } catch (Exception exception) {
             rejectCall(call, exception);
         }
@@ -473,21 +283,12 @@ public class GraftPlugin extends Plugin {
 
     @PluginMethod
     public void isSyncing(PluginCall call) {
+        Graft graft = requireImplementation(call);
+        if (graft == null) {
+            return;
+        }
         try {
-            NonEmptyCallback<IsSyncingResult> callback = new NonEmptyCallback<>() {
-                @Override
-                public void success(IsSyncingResult result) {
-                    resolveCall(call, result.toJSObject());
-                }
-
-                @Override
-                public void error(Exception exception) {
-                    rejectCall(call, exception);
-                }
-            };
-
-            assert implementation != null;
-            implementation.isSyncing(callback);
+            graft.isSyncing(resultCallback(call));
         } catch (Exception exception) {
             rejectCall(call, exception);
         }
@@ -495,20 +296,12 @@ public class GraftPlugin extends Plugin {
 
     @PluginMethod
     public void ready(PluginCall call) {
+        Graft graft = requireImplementation(call);
+        if (graft == null) {
+            return;
+        }
         try {
-            NonEmptyCallback<Result> callback = new NonEmptyCallback<>() {
-                @Override
-                public void success(Result result) {
-                    resolveCall(call, result.toJSObject());
-                }
-
-                @Override
-                public void error(Exception exception) {
-                    rejectCall(call, exception);
-                }
-            };
-
-            implementation.ready(callback);
+            graft.ready(resultCallback(call));
         } catch (Exception exception) {
             rejectCall(call, exception);
         }
@@ -516,9 +309,13 @@ public class GraftPlugin extends Plugin {
 
     @PluginMethod
     public void reload(PluginCall call) {
+        Graft graft = requireImplementation(call);
+        if (graft == null) {
+            return;
+        }
         try {
-            implementation.reload();
-            resolveCall(call);
+            graft.reload();
+            call.resolve();
         } catch (Exception exception) {
             rejectCall(call, exception);
         }
@@ -526,19 +323,13 @@ public class GraftPlugin extends Plugin {
 
     @PluginMethod
     public void reset(PluginCall call) {
-        try {
-            implementation.reset();
-            resolveCall(call);
-        } catch (Exception exception) {
-            rejectCall(call, exception);
+        Graft graft = requireImplementation(call);
+        if (graft == null) {
+            return;
         }
-    }
-
-    @PluginMethod
-    public void resetConfig(PluginCall call) {
         try {
-            implementation.resetConfig();
-            resolveCall(call);
+            graft.reset();
+            call.resolve();
         } catch (Exception exception) {
             rejectCall(call, exception);
         }
@@ -546,62 +337,12 @@ public class GraftPlugin extends Plugin {
 
     @PluginMethod
     public void setChannel(PluginCall call) {
-        try {
-            String channel = call.getString("channel");
-
-            SetChannelOptions options = new SetChannelOptions(channel);
-            EmptyCallback callback = new EmptyCallback() {
-                @Override
-                public void success() {
-                    resolveCall(call);
-                }
-
-                @Override
-                public void error(Exception exception) {
-                    rejectCall(call, exception);
-                }
-            };
-
-            implementation.setChannel(options, callback);
-        } catch (Exception exception) {
-            rejectCall(call, exception);
+        Graft graft = requireImplementation(call);
+        if (graft == null) {
+            return;
         }
-    }
-
-    @PluginMethod
-    public void setConfig(PluginCall call) {
         try {
-            SetConfigOptions options = new SetConfigOptions(call);
-            implementation.setConfig(options);
-            resolveCall(call);
-        } catch (Exception exception) {
-            rejectCall(call, exception);
-        }
-    }
-
-    @PluginMethod
-    public void setCustomId(PluginCall call) {
-        try {
-            String customId = call.getString("customId");
-            if (customId == null) {
-                call.reject(ERROR_CUSTOM_ID_MISSING);
-                return;
-            }
-
-            SetCustomIdOptions options = new SetCustomIdOptions(customId);
-            EmptyCallback callback = new EmptyCallback() {
-                @Override
-                public void success() {
-                    resolveCall(call);
-                }
-
-                @Override
-                public void error(Exception exception) {
-                    rejectCall(call, exception);
-                }
-            };
-
-            implementation.setCustomId(options, callback);
+            graft.setChannel(new SetChannelOptions(call.getString("channel")), emptyCallback(call));
         } catch (Exception exception) {
             rejectCall(call, exception);
         }
@@ -609,21 +350,12 @@ public class GraftPlugin extends Plugin {
 
     @PluginMethod
     public void setNextBundle(PluginCall call) {
+        Graft graft = requireImplementation(call);
+        if (graft == null) {
+            return;
+        }
         try {
-            SetNextBundleOptions options = new SetNextBundleOptions(call);
-            EmptyCallback callback = new EmptyCallback() {
-                @Override
-                public void success() {
-                    resolveCall(call);
-                }
-
-                @Override
-                public void error(Exception exception) {
-                    rejectCall(call, exception);
-                }
-            };
-
-            implementation.setNextBundle(options, callback);
+            graft.setNextBundle(new SetNextBundleOptions(call), emptyCallback(call));
         } catch (Exception exception) {
             rejectCall(call, exception);
         }
@@ -631,27 +363,12 @@ public class GraftPlugin extends Plugin {
 
     @PluginMethod
     public void sync(PluginCall call) {
+        Graft graft = requireImplementation(call);
+        if (graft == null) {
+            return;
+        }
         try {
-            String appId = config.getAppId();
-            if (appId == null || appId.isEmpty()) {
-                call.reject(ERROR_APP_ID_MISSING);
-                return;
-            }
-
-            SyncOptions options = new SyncOptions(call);
-            NonEmptyCallback<Result> callback = new NonEmptyCallback<>() {
-                @Override
-                public void success(Result result) {
-                    resolveCall(call, result.toJSObject());
-                }
-
-                @Override
-                public void error(Exception exception) {
-                    rejectCall(call, exception);
-                }
-            };
-
-            implementation.sync(options, callback);
+            graft.sync(new SyncOptions(call), resultCallback(call));
         } catch (Exception exception) {
             rejectCall(call, exception);
         }
@@ -666,49 +383,69 @@ public class GraftPlugin extends Plugin {
     }
 
     public void notifyReloadedListeners() {
-        JSObject event = new JSObject();
-        notifyListeners(EVENT_RELOADED, event, true);
+        notifyListeners(EVENT_RELOADED, new JSObject(), true);
     }
 
+    @Nullable
+    private Graft requireImplementation(@NonNull PluginCall call) {
+        if (implementation == null) {
+            call.reject(ERROR_NOT_INITIALIZED);
+        }
+        return implementation;
+    }
+
+    @NonNull
+    private EmptyCallback emptyCallback(@NonNull PluginCall call) {
+        return new EmptyCallback() {
+            @Override
+            public void success() {
+                call.resolve();
+            }
+
+            @Override
+            public void error(Exception exception) {
+                rejectCall(call, exception);
+            }
+        };
+    }
+
+    @NonNull
+    private <T extends Result> NonEmptyCallback<T> resultCallback(@NonNull PluginCall call) {
+        return new NonEmptyCallback<>() {
+            @Override
+            public void success(@NonNull T result) {
+                call.resolve(result.toJSObject());
+            }
+
+            @Override
+            public void error(Exception exception) {
+                rejectCall(call, exception);
+            }
+        };
+    }
+
+    @NonNull
     private GraftConfig getGraftConfig() {
         GraftConfig config = new GraftConfig();
 
-        String appId = getConfig().getString("appId", config.getAppId());
-        config.setAppId(appId);
-        boolean autoBlockRolledBackBundles = getConfig().getBoolean("autoBlockRolledBackBundles", config.getAutoBlockRolledBackBundles());
-        config.setAutoBlockRolledBackBundles(autoBlockRolledBackBundles);
-        boolean autoDeleteBundles = getConfig().getBoolean("autoDeleteBundles", config.getAutoDeleteBundles());
-        config.setAutoDeleteBundles(autoDeleteBundles);
-        String autoUpdateStrategy = getConfig().getString("autoUpdateStrategy", config.getAutoUpdateStrategy());
-        config.setAutoUpdateStrategy(autoUpdateStrategy);
-        String defaultChannel = getConfig().getString("defaultChannel", config.getDefaultChannel());
-        config.setDefaultChannel(defaultChannel);
-        int httpTimeout = getConfig().getInt("httpTimeout", config.getHttpTimeout());
-        config.setHttpTimeout(httpTimeout);
-        String publicKey = getConfig().getString("publicKey", config.getPublicKey());
-        config.setPublicKey(publicKey);
-        int readyTimeout = getConfig().getInt("readyTimeout", config.getReadyTimeout());
-        config.setReadyTimeout(readyTimeout);
-        String serverDomain = getConfig().getString("serverDomain", config.getServerDomain());
-        config.setServerDomain(serverDomain);
+        config.setAutoBlockRolledBackBundles(getConfig().getBoolean("autoBlockRolledBackBundles", config.getAutoBlockRolledBackBundles()));
+        config.setAutoDeleteBundles(getConfig().getBoolean("autoDeleteBundles", config.getAutoDeleteBundles()));
+        config.setAutoUpdateStrategy(getConfig().getString("autoUpdateStrategy", config.getAutoUpdateStrategy()));
+        config.setDefaultChannel(getConfig().getString("defaultChannel", config.getDefaultChannel()));
+        config.setHttpTimeout(getConfig().getInt("httpTimeout", config.getHttpTimeout()));
+        config.setPublicKey(getConfig().getString("publicKey", config.getPublicKey()));
+        config.setReadyTimeout(getConfig().getInt("readyTimeout", config.getReadyTimeout()));
+        config.setServerUrl(getConfig().getString("serverUrl", config.getServerUrl()));
 
         return config;
     }
 
-    private void resolveCall(@NonNull PluginCall call) {
-        call.resolve();
-    }
-
-    private void resolveCall(@NonNull PluginCall call, @NonNull JSObject result) {
-        call.resolve(result);
-    }
-
-    private void rejectCall(PluginCall call, Exception exception) {
+    private void rejectCall(@NonNull PluginCall call, @NonNull Exception exception) {
         String message = exception.getMessage();
-        if (exception instanceof java.net.SocketTimeoutException) {
+        if (exception instanceof SocketTimeoutException) {
             message = ERROR_HTTP_TIMEOUT;
-        } else {
-            message = message == null ? ERROR_UNKNOWN_ERROR : message;
+        } else if (message == null) {
+            message = ERROR_UNKNOWN_ERROR;
         }
         Logger.error(TAG, message, exception);
         call.reject(message);

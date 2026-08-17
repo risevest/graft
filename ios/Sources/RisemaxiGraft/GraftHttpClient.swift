@@ -5,60 +5,54 @@ import Alamofire
 public class GraftHttpClient: NSObject {
 
     private let config: GraftConfig
-    private var deviceId: String?
-
-    public static func getChecksumFromResponse(response: HTTPURLResponse) -> String? {
-        guard let headers = response.allHeaderFields as? [String: String] else { return nil }
-        return headers.first(where: { $0.key.lowercased() == "x-checksum" })?.value
-    }
-
-    public static func getSignatureFromResponse(response: HTTPURLResponse) -> String? {
-        guard let headers = response.allHeaderFields as? [String: String] else { return nil }
-        return headers.first(where: { $0.key.lowercased() == "x-signature" })?.value
-    }
 
     init(config: GraftConfig) {
         self.config = config
     }
 
-    public func setDeviceId(_ deviceId: String) {
-        self.deviceId = deviceId
+    public func data(url: URL) async throws -> Data {
+        let response = await AF.request(buildRequest(url: url)).validate().serializingData().response
+        if let error = response.error {
+            throw unwrap(error)
+        }
+        guard let data = response.value else {
+            throw CustomError.downloadFailed
+        }
+        return data
     }
 
-    public func download(url: URL, destination: @escaping DownloadRequest.Destination, callback: ((Progress) -> Void)?) async throws -> AFDownloadResponse<Data> {
+    public func download(url: URL, to file: URL, callback: ((Progress) -> Void)?) async throws {
+        let destination: DownloadRequest.Destination = { _, _ in
+            // `removePreviousFile` ensures that a leftover file from a failed attempt does not fail the download
+            return (file, [.createIntermediateDirectories, .removePreviousFile])
+        }
+        // `validate()` treats non-2xx responses as errors so that an error body is never saved as a bundle file
+        let response = await AF.download(buildRequest(url: url), to: destination)
+            .validate()
+            .downloadProgress { progress in
+                callback?(progress)
+            }
+            .serializingDownloadedFileURL()
+            .response
+        if let error = response.error {
+            throw unwrap(error)
+        }
+    }
+
+    private func buildRequest(url: URL) -> URLRequest {
         var request = URLRequest(url: url)
         // Ignore the URL cache so that a cached response is never replayed for a deterministic request URL
         request.cachePolicy = .reloadIgnoringLocalCacheData
         request.httpMethod = HTTPMethod.get.rawValue
         request.timeoutInterval = Double(config.httpTimeout) / 1000.0
-        if let deviceId = deviceId, !deviceId.isEmpty {
-            request.setValue(deviceId, forHTTPHeaderField: "X-Capawesome-Device-Id")
-        }
-        return try await withCheckedThrowingContinuation { continuation in
-            // `validate()` treats non-2xx responses as errors so that an error body is never saved as a bundle file
-            AF.download(request, to: destination).validate().downloadProgress { progress in
-                if let callback = callback {
-                    callback(progress)
-                }
-            }.responseData(emptyResponseCodes: [200, 204, 205]) { response in
-                continuation.resume(returning: response)
-            }
-        }
+        return request
     }
 
-    public func request<T: Decodable>(url: URL, type: T.Type) async throws -> AFDataResponse<T> {
-        var request = URLRequest(url: url)
-        // Ignore the URL cache so that a cached response is never replayed for a deterministic request URL
-        request.cachePolicy = .reloadIgnoringLocalCacheData
-        request.httpMethod = HTTPMethod.get.rawValue
-        request.timeoutInterval = Double(config.httpTimeout) / 1000.0
-        if let deviceId = deviceId, !deviceId.isEmpty {
-            request.setValue(deviceId, forHTTPHeaderField: "X-Capawesome-Device-Id")
+    private func unwrap(_ error: AFError) -> Error {
+        if let urlError = error.underlyingError as? URLError, urlError.code == .timedOut {
+            return urlError
         }
-        return try await withCheckedThrowingContinuation { continuation in
-            AF.request(request).validate().responseDecodable(of: type) { response in
-                continuation.resume(returning: response)
-            }
-        }
+        CAPLog.print("[", GraftPlugin.tag, "] ", "Request failed: \(error)")
+        return CustomError.downloadFailed
     }
 }

@@ -1,47 +1,22 @@
 package com.risemaxi.graft.classes.options;
 
 import androidx.annotation.NonNull;
-import androidx.annotation.Nullable;
-import com.risemaxi.graft.enums.ArtifactType;
 
 public class DownloadBundleOptions {
 
     @NonNull
-    private ArtifactType artifactType;
+    private final String bundleId;
 
     @NonNull
-    private String bundleId;
-
-    @Nullable
-    private String checksum;
-
-    @Nullable
-    private String signature;
+    private final String checksum;
 
     @NonNull
-    private String url;
+    private final String url;
 
-    public DownloadBundleOptions(
-        @NonNull String artifactType,
-        @NonNull String bundleId,
-        @Nullable String checksum,
-        @Nullable String signature,
-        @NonNull String url
-    ) {
-        if (artifactType.equals("manifest")) {
-            this.artifactType = ArtifactType.MANIFEST;
-        } else {
-            this.artifactType = ArtifactType.ZIP;
-        }
+    public DownloadBundleOptions(@NonNull String bundleId, @NonNull String checksum, @NonNull String url) {
         this.bundleId = bundleId;
         this.checksum = checksum;
-        this.signature = signature;
         this.url = url;
-    }
-
-    @NonNull
-    public ArtifactType getArtifactType() {
-        return artifactType;
     }
 
     @NonNull
@@ -49,14 +24,9 @@ public class DownloadBundleOptions {
         return bundleId;
     }
 
-    @Nullable
+    @NonNull
     public String getChecksum() {
         return checksum;
-    }
-
-    @Nullable
-    public String getSignature() {
-        return signature;
     }
 
     @NonNull

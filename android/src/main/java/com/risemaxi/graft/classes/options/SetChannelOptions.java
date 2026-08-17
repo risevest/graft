@@ -1,17 +1,17 @@
 package com.risemaxi.graft.classes.options;
 
-import androidx.annotation.NonNull;
+import androidx.annotation.Nullable;
 
 public class SetChannelOptions {
 
-    @NonNull
-    private String channel;
+    @Nullable
+    private final String channel;
 
-    public SetChannelOptions(@NonNull String channel) {
+    public SetChannelOptions(@Nullable String channel) {
         this.channel = channel;
     }
 
-    @NonNull
+    @Nullable
     public String getChannel() {
         return channel;
     }

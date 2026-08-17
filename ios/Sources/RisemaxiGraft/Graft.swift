@@ -2,17 +2,12 @@ import Foundation
 import CryptoKit
 import ZIPFoundation
 import Capacitor
-import Alamofire
-import CommonCrypto
 
-// swiftlint:disable type_body_length
 @objc public class Graft: NSObject {
     private let autoUpdateIntervalMs: Int64 = 15 * 60 * 1000 // 15 minutes
     private let cachesDirectoryUrl = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first!
     private let config: GraftConfig
-    private let defaultWebAssetDir = "public" // DO NOT CHANGE! (See https://dub.sh/Buvz4yj)
     private let httpClient: GraftHttpClient
-    private let manifestFileName = "capawesome-graft-manifest.json" // DO NOT CHANGE!
     private let plugin: GraftPlugin
     private let preferences: GraftPreferences
 
@@ -28,13 +23,7 @@ import CommonCrypto
         self.preferences = GraftPreferences()
         super.init()
 
-        // Check version and reset config if version changed
-        checkAndResetConfigIfVersionChanged()
-
-        // Set the device ID on the HTTP client (after any potential config reset)
-        self.httpClient.setDeviceId(getDeviceId())
-
-        // Start the rollback timer to rollback to the default bundle
+        // Start the rollback timer to rollback to the last known good bundle
         // if the app is not ready after a certain time
         startRollbackTimer()
     }
@@ -47,8 +36,7 @@ import CommonCrypto
         let bundleId = options.getBundleId()
 
         if !hasBundleById(bundleId) {
-            let error = CustomError.bundleNotFound
-            completion(error)
+            completion(CustomError.bundleNotFound)
             return
         }
 
@@ -61,137 +49,84 @@ import CommonCrypto
     }
 
     @objc public func downloadBundle(_ options: DownloadBundleOptions) async throws {
-        let artifactType = options.getArtifactType()
         let bundleId = options.getBundleId()
-        let checksum = options.getChecksum()
-        let signature = options.getSignature()
-        let url = options.getUrl()
 
-        // Check if the bundle already exists
         if hasBundleById(bundleId) {
             throw CustomError.bundleAlreadyExists
         }
+        guard let url = URL(string: options.getUrl()) else {
+            throw CustomError.urlMissing
+        }
 
-        // Download the bundle
-        if artifactType == .manifest {
-            try await downloadBundleOfTypeManifest(bundleId: bundleId, url: url)
-        } else {
-            try await downloadBundleOfTypeZip(bundleId: bundleId, checksum: checksum, signature: signature, url: url)
-        }
-    }
+        let zipFile = cachesDirectoryUrl.appendingPathComponent(UUID().uuidString + ".zip")
+        defer { try? FileManager.default.removeItem(at: zipFile) }
 
-    @objc public func fetchChannels(_ options: FetchChannelsOptions) async throws -> FetchChannelsResult {
-        var parameters = [String: String]()
-        if let limit = options.getLimit() {
-            parameters["limit"] = String(limit)
-        }
-        if let offset = options.getOffset() {
-            parameters["offset"] = String(offset)
-        }
-        if let query = options.getQuery() {
-            parameters["query"] = query
-        }
-        var urlComponents = URLComponents(string: "https://\(config.serverDomain)/v1/apps/\(getAppId() ?? "")/channels")!
-        if !parameters.isEmpty {
-            urlComponents.queryItems = parameters.map { URLQueryItem(name: $0.key, value: $0.value) }
-        }
-        let url = try urlComponents.asURL()
-        let response = try await self.httpClient.request(url: url, type: [GetChannelsResponseItem].self)
-        if let error = response.error {
-            if response.response?.statusCode == 401 {
-                throw CustomError.channelDiscoveryNotEnabled
-            }
-            if let urlError = error.underlyingError as? URLError {
-                if urlError.code == .timedOut {
-                    throw urlError
-                }
-            }
-            throw error
-        }
-        let items = response.value ?? []
-        let channels = items.map { ChannelResult(id: $0.id, name: $0.name) }
-        return FetchChannelsResult(channels: channels)
-    }
+        try await httpClient.download(url: url, to: zipFile, callback: { progress in
+            self.notifyDownloadBundleProgressListeners(
+                bundleId: bundleId,
+                downloadedBytes: progress.completedUnitCount,
+                totalBytes: progress.totalUnitCount
+            )
+        })
+        try verifyChecksum(url: zipFile, expected: options.getChecksum())
 
-    @objc public func fetchLatestBundle(_ options: FetchLatestBundleOptions) async throws -> FetchLatestBundleResult {
-        let response: GetLatestBundleResponse? = try await self.fetchLatestBundle(options)
-        return FetchLatestBundleResult(artifactType: response?.artifactType, bundleId: response?.bundleId, channel: response?.channelName, checksum: response?.checksum, customProperties: response?.customProperties, downloadUrl: response?.url, signature: response?.signature)
+        let directory = try unzipFile(zipFile: zipFile)
+        guard let indexHtmlFile = searchIndexHtmlFile(url: directory) else {
+            throw CustomError.bundleIndexHtmlMissing
+        }
+        try moveBundleIntoPlace(from: indexHtmlFile.deletingLastPathComponent(), bundleId: bundleId)
     }
 
     @objc public func getBlockedBundles(completion: @escaping (Result?, Error?) -> Void) {
-        var bundleIds: [String] = []
-        if let blockedIds = preferences.getBlockedBundleIds(), !blockedIds.isEmpty {
-            bundleIds = blockedIds.split(separator: ",").map(String.init)
-        }
-        let result = GetBlockedBundlesResult(bundleIds: bundleIds)
-        completion(result, nil)
-    }
-
-    @objc public func getBundles(completion: @escaping (Result?, Error?) -> Void) {
-        let bundleIds = getDownloadedBundleIds()
-        let result = GetBundlesResult(bundleIds: bundleIds)
-        completion(result, nil)
-    }
-
-    @objc public func getDownloadedBundles(completion: @escaping (Result?, Error?) -> Void) {
-        let bundleIds = getDownloadedBundleIds()
-        let result = GetDownloadedBundlesResult(bundleIds: bundleIds)
-        completion(result, nil)
+        completion(GetBlockedBundlesResult(bundleIds: Array(getBlockedBundleIds())), nil)
     }
 
     @objc public func getChannel(completion: @escaping (Result?, Error?) -> Void) {
-        let channel = getChannel()
-        let result = GetChannelResult(channel: channel)
-        completion(result, nil)
-    }
-
-    @objc public func getConfig(completion: @escaping (Result?, Error?) -> Void) {
-        let appId = getAppId()
-        let autoUpdateStrategy = config.autoUpdateStrategy
-        let result = GetConfigResult(appId: appId, autoUpdateStrategy: autoUpdateStrategy)
-        completion(result, nil)
+        completion(GetChannelResult(channel: getChannel()), nil)
     }
 
     @objc public func getCurrentBundle(completion: @escaping (Result?, Error?) -> Void) {
-        let bundleId = getCurrentBundleId()
-        let result = GetCurrentBundleResult(bundleId: bundleId)
-        completion(result, nil)
+        completion(GetCurrentBundleResult(bundleId: getCurrentBundleId()), nil)
     }
 
-    @objc public func getCustomId(completion: @escaping (Result?, Error?) -> Void) {
-        let customId = preferences.getCustomId()
-
-        let result = GetCustomIdResult(customId: customId)
-        completion(result, nil)
+    @objc public func getDownloadedBundles(completion: @escaping (Result?, Error?) -> Void) {
+        completion(GetDownloadedBundlesResult(bundleIds: getDownloadedBundleIds()), nil)
     }
 
-    @objc public func getDeviceId(completion: @escaping (Result?, Error?) -> Void) {
-        let deviceId = getDeviceId()
-        let result = GetDeviceIdResult(deviceId: deviceId)
-        completion(result, nil)
+    /// What the page is told about the bundle it is running, as JSON, so an app never has to compile
+    /// a release identifier into its own bundle.
+    @objc public func releaseIdentityJSON() -> String {
+        let releaseId = GraftPointer.resolveActiveBundleId() ?? GraftPointer.readEmbeddedManifest()?.id
+        let identity: [String: Any] = [
+            "nativeBuild": GraftPointer.readNativeBuild() ?? NSNull(),
+            "releaseId": releaseId ?? NSNull()
+        ]
+        guard let data = try? JSONSerialization.data(withJSONObject: identity),
+              let json = String(data: data, encoding: .utf8) else {
+            return "null"
+        }
+        return json
+    }
+
+    @objc public func getInstallId(completion: @escaping (Result?, Error?) -> Void) {
+        let installId = preferences.getInstallId()
+        completion(GetInstallIdResult(installId: installId, bucket: ReleaseSelector.bucket(for: installId)), nil)
     }
 
     @objc public func getNextBundle(completion: @escaping (Result?, Error?) -> Void) {
-        let bundleId: String? = getNextBundleId()
-        let result = GetNextBundleResult(bundleId: bundleId)
-        completion(result, nil)
+        completion(GetNextBundleResult(bundleId: getNextBundleId()), nil)
     }
 
     @objc public func getVersionCode(completion: @escaping (Result?, Error?) -> Void) {
-        let versionCode = getVersionCode()
-        let result = GetVersionCodeResult(versionCode: versionCode)
-        completion(result, nil)
+        completion(GetVersionCodeResult(versionCode: getVersionCode()), nil)
     }
 
     @objc public func getVersionName(completion: @escaping (Result?, Error?) -> Void) {
-        let versionName = getVersionName()
-        let result = GetVersionNameResult(versionName: versionName)
-        completion(result, nil)
+        completion(GetVersionNameResult(versionName: getVersionName()), nil)
     }
 
     @objc public func isSyncing(completion: @escaping (Result?, Error?) -> Void) {
-        let result = IsSyncingResult(syncing: syncInProgress)
-        completion(result, nil)
+        completion(IsSyncingResult(syncing: syncInProgress), nil)
     }
 
     @objc public func handleLoad() {
@@ -219,19 +154,21 @@ import CommonCrypto
         }
         // Get the current and previous bundle IDs
         let currentBundleId = getCurrentBundleId()
-        let previousBundleId = getPreviousBundleId()
+        let previousBundleId = preferences.getPreviousBundleId()
         // Block the rolled back bundle if enabled
-        if config.autoBlockRolledBackBundles && rollbackPerformed, let previousBundleId = previousBundleId {
-            addBlockedBundleId(previousBundleId)
+        if config.autoBlockRolledBackBundles, rollbackPerformed, let previousBundleId = previousBundleId {
+            recordFailure(previousBundleId)
         }
         // Return the result
-        let result = ReadyResult(currentBundleId: currentBundleId, previousBundleId: previousBundleId, rollback: rollbackPerformed)
-        completion(result, nil)
+        completion(ReadyResult(currentBundleId: currentBundleId, previousBundleId: previousBundleId, rollback: rollbackPerformed), nil)
         // Set the new previous bundle ID
-        setPreviousBundleId(bundleId: currentBundleId)
+        preferences.setPreviousBundleId(currentBundleId)
         // A bundle that reaches this point booted, so it is the one to roll back to next time
         if !rollbackPerformed {
             preferences.setLastKnownGoodBundleId(currentBundleId)
+            if let currentBundleId = currentBundleId, currentBundleId == preferences.getLastFailedBundleId() {
+                preferences.setLastFailed(nil, count: 0)
+            }
         }
         // Reset the rollback flag
         rollbackPerformed = false
@@ -243,47 +180,25 @@ import CommonCrypto
     }
 
     @objc public func reset() {
-        self.setNextBundleById(nil)
-    }
-
-    @objc public func resetConfig() {
-        preferences.setAppId(nil)
+        setNextBundleById(nil)
     }
 
     @objc public func setChannel(_ options: SetChannelOptions, completion: @escaping (Error?) -> Void) {
-        let channel = options.getChannel()
-
-        preferences.setChannel(channel)
-        completion(nil)
-    }
-
-    @objc public func setConfig(_ options: SetConfigOptions) {
-        let appId = options.getAppId()
-        preferences.setAppId(appId)
-    }
-
-    @objc public func setCustomId(_ options: SetCustomIdOptions, completion: @escaping (Error?) -> Void) {
-        let customId = options.getCustomId()
-
-        preferences.setCustomId(customId)
+        preferences.setChannel(options.getChannel())
         completion(nil)
     }
 
     @objc public func setNextBundle(_ options: SetNextBundleOptions, completion: @escaping (Error?) -> Void) {
-        let bundleId = options.getBundleId()
-
-        if let bundleId = bundleId {
-            if hasBundleById(bundleId) {
-                setNextBundleById(bundleId)
-            } else {
-                let error = CustomError.bundleNotFound
-                completion(error)
-                return
-            }
-        } else {
+        guard let bundleId = options.getBundleId() else {
             reset()
+            completion(nil)
+            return
         }
-
+        if !hasBundleById(bundleId) {
+            completion(CustomError.bundleNotFound)
+            return
+        }
+        setNextBundleById(bundleId)
         completion(nil)
     }
 
@@ -292,363 +207,264 @@ import CommonCrypto
             throw CustomError.syncInProgress
         }
         syncInProgress = true
-        defer {
-            syncInProgress = false
-        }
+        defer { syncInProgress = false }
 
-        let channel = options.getChannel()
-        // Fetch the latest bundle
-        let fetchLatestBundleOptions = FetchLatestBundleOptions(channel: channel)
-        guard let response = try await fetchLatestBundle(fetchLatestBundleOptions) else {
+        guard let channel = options.getChannel() ?? getChannel() else {
+            throw CustomError.channelMissing
+        }
+        let publicKey = try loadPublicKey()
+        let channelUrl = try buildChannelUrl(channel: channel)
+        CAPLog.print("[", GraftPlugin.tag, "] Reading channel document: ", channelUrl)
+
+        let document = try JSONDecoder().decode(ChannelDocument.self, from: try await httpClient.data(url: channelUrl))
+        if document.killSwitch {
+            CAPLog.print("[", GraftPlugin.tag, "] ", "Kill switch is enabled. Reverting to the embedded bundle.")
+            setNextBundleById(nil)
+            return SyncResult(nextBundleId: nil)
+        }
+        guard let release = ReleaseSelector.select(
+            from: document.releases,
+            versionCode: try nativeBuild(),
+            highestInstalledCounter: preferences.getHighestInstalledCounter(),
+            bucket: ReleaseSelector.bucket(for: preferences.getInstallId()),
+            blockedBundleIds: getBlockedBundleIds()
+        ) else {
             CAPLog.print("[", GraftPlugin.tag, "] ", "No update available.")
             return SyncResult(nextBundleId: nil)
         }
-        let artifactType = response.artifactType
-        let latestBundleId = response.bundleId
-        let checksum = response.checksum
-        let signature = response.signature
-        let downloadUrl = response.url
-        // Check if the bundle is blocked
-        if isBlockedBundleId(latestBundleId) {
-            CAPLog.print("[", GraftPlugin.tag, "] ", "Bundle is blocked and will not be downloaded.")
-            return SyncResult(nextBundleId: nil)
+        if hasBundleById(release.id) {
+            stageRelease(bundleId: release.id, counter: release.counter)
+            return SyncResult(nextBundleId: release.id)
         }
-        // Check if bundle already exists
-        if hasBundleById(latestBundleId) {
-            var nextBundleId: String?
-            let currentBundleId = self.getCurrentBundleId()
-            if latestBundleId != currentBundleId {
-                // Set the next bundle
-                setNextBundleById(latestBundleId)
-                nextBundleId = latestBundleId
+
+        let manifestUrl = try resolveManifestUrl(channelUrl: channelUrl, manifest: release.manifest)
+        CAPLog.print("[", GraftPlugin.tag, "] Reading manifest: ", manifestUrl)
+        let manifestData = try await httpClient.data(url: manifestUrl)
+        // The signature covers these exact bytes, so nothing is decoded before it is verified
+        try verifySignature(content: manifestData, signature: release.sig, publicKey: publicKey)
+        let manifest = try JSONDecoder().decode(Manifest.self, from: manifestData)
+        try verifyManifestIsAcceptable(manifest, release: release, channel: channel)
+
+        try await install(manifest: manifest, manifestData: manifestData, manifestUrl: manifestUrl)
+        stageRelease(bundleId: manifest.id, counter: release.counter)
+        return SyncResult(nextBundleId: manifest.id)
+    }
+
+    private func install(manifest: Manifest, manifestData: Data, manifestUrl: URL) async throws {
+        let directory = cachesDirectoryUrl.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        do {
+            let currentHrefBySha256 = loadCurrentHrefBySha256()
+            var filesToDownload = [ManifestFile]()
+            for file in manifest.files {
+                guard let currentHref = currentHrefBySha256[file.sha256],
+                      copyCurrentBundleFile(currentHref: currentHref, file: file, to: directory) else {
+                    filesToDownload.append(file)
+                    continue
+                }
             }
-            return SyncResult(nextBundleId: nextBundleId)
+            try await downloadBundleFiles(manifestUrl: manifestUrl, files: filesToDownload, to: directory, bundleId: manifest.id)
+
+            guard FileManager.default.fileExists(atPath: directory.appendingPathComponent(GraftPointer.indexFileName).path) else {
+                throw CustomError.bundleIndexHtmlMissing
+            }
+            // Written last so the verified file set is exactly what the manifest describes
+            try manifestData.write(to: directory.appendingPathComponent(GraftPointer.manifestFileName))
+            try moveBundleIntoPlace(from: directory, bundleId: manifest.id)
+        } catch {
+            try? FileManager.default.removeItem(at: directory)
+            throw error
         }
-        // Download the bundle
-        if artifactType == .manifest {
-            try await downloadBundleOfTypeManifest(bundleId: latestBundleId, url: downloadUrl)
+    }
+
+    /// Records the release as installed before it is staged, so a bundle that never boots still raises
+    /// the downgrade floor and the device can only ever move forward.
+    private func stageRelease(bundleId: String, counter: Int) {
+        if counter > preferences.getHighestInstalledCounter() {
+            preferences.setHighestInstalledCounter(counter)
+        }
+        if bundleId != getCurrentBundleId() {
+            setNextBundleById(bundleId)
+        }
+    }
+
+    private func verifyManifestIsAcceptable(_ manifest: Manifest, release: ChannelRelease, channel: String) throws {
+        guard manifest.id == release.id,
+              let counter = manifest.counter, counter == release.counter,
+              manifest.minNativeBuild == release.minNativeBuild,
+              manifest.channel == channel,
+              manifest.minNativeBuild <= (try nativeBuild()),
+              counter > preferences.getHighestInstalledCounter() else {
+            throw CustomError.manifestMismatch
+        }
+        let now = Int(Date().timeIntervalSince1970)
+        guard let notBefore = manifest.notBefore, let expiresAt = manifest.expiresAt,
+              now >= notBefore, now < expiresAt else {
+            throw CustomError.manifestExpired
+        }
+    }
+
+    private func buildChannelUrl(channel: String) throws -> URL {
+        return try parseServerUrl()
+            .appendingPathComponent("v1")
+            .appendingPathComponent("channel")
+            .appendingPathComponent("\(channel).json")
+    }
+
+    /// Confines the manifest to the configured origin. The signature already decides what may be
+    /// installed; this keeps an edited channel document from pointing the device at another host.
+    private func resolveManifestUrl(channelUrl: URL, manifest: String) throws -> URL {
+        let serverUrl = try parseServerUrl()
+        guard let manifestUrl = URL(string: manifest, relativeTo: channelUrl)?.absoluteURL,
+              manifestUrl.scheme == serverUrl.scheme,
+              manifestUrl.host == serverUrl.host,
+              manifestUrl.port == serverUrl.port else {
+            throw CustomError.manifestUrlInvalid
+        }
+        return manifestUrl
+    }
+
+    private func parseServerUrl() throws -> URL {
+        guard let serverUrl = config.serverUrl else {
+            throw CustomError.serverUrlMissing
+        }
+        guard let url = URL(string: serverUrl), url.scheme != nil, url.host != nil else {
+            throw CustomError.serverUrlInvalid
+        }
+        return url
+    }
+
+    private func buildFileUrl(manifestUrl: URL, href: String) -> URL {
+        var url = manifestUrl.deletingLastPathComponent()
+        for segment in href.split(separator: "/") {
+            url.appendPathComponent(String(segment))
+        }
+        return url
+    }
+
+    private func downloadBundleFiles(manifestUrl: URL, files: [ManifestFile], to directory: URL, bundleId: String) async throws {
+        if files.isEmpty {
+            return
+        }
+        let totalBytes = Int64(files.map { $0.size }.reduce(0, +))
+        actor CompletedBytes {
+            var value: Int64 = 0
+            func add(_ amount: Int64) -> Int64 {
+                value += amount
+                return value
+            }
+        }
+        let completedBytes = CompletedBytes()
+
+        try await withThrowingTaskGroup(of: Void.self) { group in
+            for file in files {
+                group.addTask {
+                    let destination = directory.appendingPathComponent(file.href)
+                    try await self.httpClient.download(
+                        url: self.buildFileUrl(manifestUrl: manifestUrl, href: file.href),
+                        to: destination,
+                        callback: { progress in
+                            Task {
+                                let downloaded = await completedBytes.value + progress.completedUnitCount
+                                self.notifyDownloadBundleProgressListeners(
+                                    bundleId: bundleId,
+                                    downloadedBytes: downloaded,
+                                    totalBytes: totalBytes
+                                )
+                            }
+                        }
+                    )
+                    try self.verifyChecksum(url: destination, expected: file.sha256)
+                    let downloaded = await completedBytes.add(Int64(file.size))
+                    self.notifyDownloadBundleProgressListeners(bundleId: bundleId, downloadedBytes: downloaded, totalBytes: totalBytes)
+                }
+            }
+            try await group.waitForAll()
+        }
+    }
+
+    /// - Returns: Where each digest of the running bundle can be read from, so unchanged files are
+    ///   copied rather than downloaded.
+    private func loadCurrentHrefBySha256() -> [String: String] {
+        let manifest: Manifest?
+        if let currentBundleId = getCurrentBundleId() {
+            manifest = GraftPointer.readManifest(
+                at: GraftPointer.buildBundleDirectory(bundleId: currentBundleId).appendingPathComponent(GraftPointer.manifestFileName)
+            )
         } else {
-            try await downloadBundleOfTypeZip(bundleId: latestBundleId, checksum: checksum, signature: signature, url: downloadUrl)
+            manifest = GraftPointer.readEmbeddedManifest()
         }
-        // Set the next bundle
-        setNextBundleById(latestBundleId)
-        return SyncResult(nextBundleId: latestBundleId)
+        return manifest?.hrefBySha256 ?? [:]
     }
 
-    private func addBundle(bundleId: String, directory: URL) throws {
-        // Search folder with index.html file
-        guard let indexHtmlFile = self.searchIndexHtmlFile(url: directory) else {
-            throw CustomError.bundleIndexHtmlMissing
-        }
-
-        // Create the bundles directory if it does not exist
-        self.createBundlesDirectory()
-
-        // Move the unzipped files to the bundles directory
-        let bundlePath = self.buildBundlePathFor(bundleId: bundleId)
-        try FileManager.default.moveItem(atPath: indexHtmlFile.deletingLastPathComponent().path, toPath: bundlePath)
-    }
-
-    private func addBundleOfTypeManifest(bundleId: String, directory: URL) async throws {
-        try addBundle(bundleId: bundleId, directory: directory)
-    }
-
-    private func addBundleOfTypeZip(bundleId: String, zipFile: URL) async throws {
-        // Unzip the bundle
-        let unzippedDirectory = try self.unzipFile(zipFile: zipFile)
-        // Add the bundle
-        try self.addBundle(bundleId: bundleId, directory: unzippedDirectory)
-    }
-
-    private func buildCapacitorServerPathFor(bundleId: String?) -> String {
-        let path: String
-        if let bundleId = bundleId {
-            path = buildBundlePathFor(bundleId: bundleId)
+    private func copyCurrentBundleFile(currentHref: String, file: ManifestFile, to directory: URL) -> Bool {
+        let source: URL
+        if let currentBundleId = getCurrentBundleId() {
+            source = GraftPointer.buildBundleDirectory(bundleId: currentBundleId).appendingPathComponent(currentHref)
         } else {
-            path = GraftPointer.buildEmbeddedBundleDirectory().path
+            source = GraftPointer.buildEmbeddedBundleDirectory().appendingPathComponent(currentHref)
         }
-        return path
-    }
-
-    private func buildBundlePathFor(bundleId: String) -> String {
-        return buildBundleURLFor(bundleId: bundleId).path
-    }
-
-    private func buildBundleURLFor(bundleId: String) -> URL {
-        return GraftPointer.buildBundleDirectory(bundleId: bundleId)
-    }
-
-    private func copyCurrentBundleFile(fileToCopy: ManifestItem, toDirectory: URL) throws {
-        let currentBundleId = getCurrentBundleId()
-        let destination = toDirectory.appendingPathComponent(fileToCopy.href)
-        let parentDirectory = destination.deletingLastPathComponent()
-        try FileManager.default.createDirectory(at: parentDirectory, withIntermediateDirectories: true, attributes: nil)
-
-        let sourceURL: URL
-        if let currentBundleId = currentBundleId {
-            sourceURL = buildBundleURLFor(bundleId: currentBundleId).appendingPathComponent(fileToCopy.href)
-        } else {
-            guard let file = Bundle.main.url(forResource: fileToCopy.href, withExtension: nil, subdirectory: defaultWebAssetDir) else {
-                // If the file does not exist in the current bundle, throw an error
-                // We can use CustomError.unknown here since this error will not be handled by the user
-                throw CustomError.unknown
-            }
-            sourceURL = file
-        }
-
-        try FileManager.default.copyItem(at: sourceURL, to: destination)
-    }
-
-    private func copyCurrentBundleFilesAndReturnFailures(
-        filesToCopy: [ManifestItem],
-        toDirectory: URL
-    ) -> [ManifestItem] {
-        var missingItems = [ManifestItem]()
-        for fileToCopy in filesToCopy {
-            let success = tryCopyCurrentBundleFile(fileToCopy: fileToCopy, toDirectory: toDirectory)
-            if !success {
-                CAPLog.print("[", GraftPlugin.tag, "] ", "Failed to copy file: \(fileToCopy.href)")
-                // If the file could not be copied, add it to the list of missing items
-                missingItems.append(fileToCopy)
-            }
-        }
-        return missingItems
-    }
-
-    private func createBundlesDirectory() {
-        var bundlesDirectoryUrl = GraftPointer.buildBundlesDirectory()
-        let exists = FileManager.default.fileExists(atPath: bundlesDirectoryUrl.path)
-        if !exists {
-            do {
-                try FileManager.default.createDirectory(at: bundlesDirectoryUrl, withIntermediateDirectories: true, attributes: nil)
-                var resourceValues = URLResourceValues()
-                resourceValues.isExcludedFromBackup = true
-                try bundlesDirectoryUrl.setResourceValues(resourceValues)
-            } catch {
-                CAPLog.print("[", GraftPlugin.tag, "] ", "Failed to create bundles directory.")
-            }
+        let destination = directory.appendingPathComponent(file.href)
+        do {
+            try FileManager.default.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try FileManager.default.copyItem(at: source, to: destination)
+            try verifyChecksum(url: destination, expected: file.sha256)
+            return true
+        } catch {
+            CAPLog.print("[", GraftPlugin.tag, "] ", "Failed to reuse file \(currentHref): \(error.localizedDescription)")
+            try? FileManager.default.removeItem(at: destination)
+            return false
         }
     }
 
-    private func createTemporaryDirectory() throws -> URL {
-        let temporaryDirectory = cachesDirectoryUrl.appendingPathComponent(UUID().uuidString)
-        try FileManager.default.createDirectory(at: temporaryDirectory, withIntermediateDirectories: true, attributes: nil)
-        return temporaryDirectory
+    private func moveBundleIntoPlace(from source: URL, bundleId: String) throws {
+        var bundlesDirectory = GraftPointer.buildBundlesDirectory()
+        if !FileManager.default.fileExists(atPath: bundlesDirectory.path) {
+            try FileManager.default.createDirectory(at: bundlesDirectory, withIntermediateDirectories: true)
+            var resourceValues = URLResourceValues()
+            resourceValues.isExcludedFromBackup = true
+            try bundlesDirectory.setResourceValues(resourceValues)
+        }
+        try FileManager.default.moveItem(at: source, to: GraftPointer.buildBundleDirectory(bundleId: bundleId))
     }
 
     private func deleteBundleById(_ bundleId: String) throws {
-        // Delete the bundle directory
-        let path = buildBundlePathFor(bundleId: bundleId)
-        try FileManager.default.removeItem(atPath: path)
-        // Reset the next bundle if it is the deleted bundle
-        let nextBundleId = getNextBundleId()
-        if bundleId == nextBundleId {
+        try FileManager.default.removeItem(at: GraftPointer.buildBundleDirectory(bundleId: bundleId))
+        if bundleId == getNextBundleId() {
             setNextBundleById(nil)
         }
     }
 
     private func deleteUnusedBundles() {
-        let bundleIds = getDownloadedBundleIds()
         let currentBundleId = getCurrentBundleId()
         let nextBundleId = getNextBundleId()
         let lastKnownGoodBundleId = preferences.getLastKnownGoodBundleId()
 
-        for bundleId in bundleIds {
-            if bundleId != currentBundleId && bundleId != nextBundleId && bundleId != lastKnownGoodBundleId {
-                do {
-                    try deleteBundleById(bundleId)
-                } catch {
-                    CAPLog.print("[", GraftPlugin.tag, "] ", "Failed to delete bundle with id: \(bundleId)")
-                }
+        for bundleId in getDownloadedBundleIds() where
+            bundleId != currentBundleId && bundleId != nextBundleId && bundleId != lastKnownGoodBundleId {
+            do {
+                try deleteBundleById(bundleId)
+            } catch {
+                CAPLog.print("[", GraftPlugin.tag, "] ", "Failed to delete bundle with id: \(bundleId)")
             }
-        }
-    }
-
-    private func downloadAndVerifyFile(url: String, file: URL, checksum: String?, signature: String?, callback: ((Progress) -> Void)?) async throws {
-        let destination: DownloadRequest.Destination = { _, _ in
-            // `removePreviousFile` ensures that a leftover file from a failed attempt does not fail the download
-            return (file, [.createIntermediateDirectories, .removePreviousFile])
-        }
-        let urlComponents = URLComponents(string: url)!
-        let result = try await httpClient.download(url: urlComponents.asURL(), destination: destination, callback: callback)
-        if let error = result.error {
-            CAPLog.print("[", GraftPlugin.tag, "] ", "Failed to download file: \(error)")
-            if let urlError = error.underlyingError as? URLError {
-                if urlError.code == .timedOut {
-                    throw urlError
-                }
-            }
-            throw CustomError.downloadFailed
-        }
-        guard let response = result.response else {
-            throw CustomError.unknown
-        }
-        let checksum = checksum ?? GraftHttpClient.getChecksumFromResponse(response: response)
-        let signature = signature ?? GraftHttpClient.getSignatureFromResponse(response: response)
-        try verifyFile(url: file, checksum: checksum, signature: signature)
-    }
-
-    private func downloadBundleFile(baseUrl: String, href: String, directory: URL, callback: ((Progress) -> Void)?) async throws -> URL {
-        let fileURL = directory.appendingPathComponent(href)
-        var parameters = [String: String]()
-        parameters["href"] = href
-        var urlComponents = URLComponents(string: baseUrl)!
-        urlComponents.queryItems = parameters.map { URLQueryItem(name: $0.key, value: $0.value) }
-        let url = urlComponents.string!
-        try await self.downloadAndVerifyFile(url: url, file: fileURL, checksum: nil, signature: nil, callback: callback)
-        return fileURL
-    }
-
-    private func downloadBundleFiles(url: String, filesToDownload: [ManifestItem], directory: URL, callback: ((Progress) -> Void)?) async throws {
-        let totalBytesToDownload = Int64(filesToDownload.map { $0.sizeInBytes }.reduce(0, +))
-        actor TotalBytesDownloaded {
-            var value: Int64 = 0
-            func add(_ amount: Int64) {
-                value += amount
-            }
-        }
-        let totalBytesDownloaded = TotalBytesDownloaded()
-        try await withThrowingTaskGroup(of: Void.self) { group in
-            for fileToDownload in filesToDownload {
-                group.addTask {
-                    _ = try await self.downloadBundleFile(baseUrl: url, href: fileToDownload.href, directory: directory, callback: { progress in
-                        Task {
-                            // Progress is only reported if the file is downloaded in chunks
-                            if let callback = callback {
-                                let totalBytesDownloaded = await totalBytesDownloaded.value
-                                let totalProgress = Progress(totalUnitCount: totalBytesToDownload, completedUnitCount: progress.completedUnitCount + totalBytesDownloaded)
-                                callback(totalProgress)
-                            }
-                        }
-                    })
-                    // Emit the current progress in case the file was not downloaded in chunks
-                    if let callback = callback {
-                        await totalBytesDownloaded.add(Int64(fileToDownload.sizeInBytes))
-                        let totalBytesDownloaded = await totalBytesDownloaded.value
-                        let totalProgress = Progress(totalUnitCount: totalBytesToDownload, completedUnitCount: totalBytesDownloaded)
-                        callback(totalProgress)
-                    }
-                }
-            }
-            try await group.waitForAll()
-            // Call the callback one last time to make sure the progress is at 100%
-            if let callback = callback {
-                let totalProgress = Progress(totalUnitCount: totalBytesToDownload, completedUnitCount: totalBytesToDownload)
-                callback(totalProgress)
-            }
-        }
-    }
-
-    private func downloadBundleOfTypeManifest(bundleId: String, url: String) async throws {
-        // Create a temporary directory
-        let temporaryDirectory = try createTemporaryDirectory()
-        // Download the latest manifest
-        let latestManifestFile = try await downloadBundleFile(baseUrl: url, href: manifestFileName, directory: temporaryDirectory, callback: nil)
-        let latestManifest = try loadManifest(file: latestManifestFile)
-        // Load the current manifest
-        let currentManifest = try loadCurrentManifest()
-        // Compare the manifests
-        var itemsToCopy = [ManifestItem]()
-        var itemsToDownload = [ManifestItem]()
-        if let currentManifest = currentManifest {
-            itemsToCopy.append(contentsOf: Manifest.findDuplicateItems(latestManifest, currentManifest))
-            itemsToDownload.append(contentsOf: Manifest.findMissingItems(latestManifest, currentManifest))
-        } else {
-            itemsToDownload.append(contentsOf: latestManifest.items)
-        }
-        // Copy the files
-        let missingItems = copyCurrentBundleFilesAndReturnFailures(filesToCopy: itemsToCopy, toDirectory: temporaryDirectory)
-        // If items could not be copied, add them to the list of items to download
-        if !missingItems.isEmpty {
-            itemsToDownload.append(contentsOf: missingItems)
-        }
-        // Download the files
-        try await self.downloadBundleFiles(url: url, filesToDownload: itemsToDownload, directory: temporaryDirectory, callback: { progress in
-            let event = DownloadBundleProgressEvent(bundleId: bundleId, downloadedBytes: progress.completedUnitCount, totalBytes: progress.totalUnitCount)
-            self.notifyDownloadBundleProgressListeners(event)
-        })
-        // Add the bundle
-        try await addBundleOfTypeManifest(bundleId: bundleId, directory: temporaryDirectory)
-    }
-
-    private func downloadBundleOfTypeZip(bundleId: String, checksum: String?, signature: String?, url: String) async throws {
-        let timestamp = String(Int(Date().timeIntervalSince1970))
-        let temporaryZipFileUrl = self.cachesDirectoryUrl.appendingPathComponent(timestamp + ".zip")
-        // Download the bundle
-        try await downloadAndVerifyFile(url: url, file: temporaryZipFileUrl, checksum: checksum, signature: signature, callback: { progress in
-            let event = DownloadBundleProgressEvent(bundleId: bundleId, downloadedBytes: progress.completedUnitCount, totalBytes: progress.totalUnitCount)
-            self.notifyDownloadBundleProgressListeners(event)
-        })
-        // Add the bundle
-        try await addBundleOfTypeZip(bundleId: bundleId, zipFile: temporaryZipFileUrl)
-    }
-
-    private func fetchLatestBundle(_ options: FetchLatestBundleOptions) async throws -> GetLatestBundleResponse? {
-        let channel = options.getChannel() ?? getChannel()
-        var parameters = [String: String]()
-        parameters["appVersionCode"] = getVersionCode()
-        parameters["appVersionName"] = getVersionName()
-        parameters["bundleId"] = getCurrentBundleId()
-        parameters["channelName"] = channel
-        parameters["customId"] = preferences.getCustomId()
-        parameters["deviceId"] = getDeviceId()
-        parameters["osVersion"] = await UIDevice.current.systemVersion
-        parameters["platform"] = "1"
-        parameters["pluginVersion"] = GraftPlugin.version
-        var urlComponents = URLComponents(string: "https://\(config.serverDomain)/v1/apps/\(getAppId() ?? "")/bundles/latest")!
-        urlComponents.queryItems = parameters.map { URLQueryItem(name: $0.key, value: $0.value) }
-        let url = try urlComponents.asURL()
-        CAPLog.print("[", GraftPlugin.tag, "] Fetching latest bundle: ", url)
-        let response = try await self.httpClient.request(url: url, type: GetLatestBundleResponse.self)
-        if let data = response.data {
-            CAPLog.print("[", GraftPlugin.tag, "] Latest bundle response: ", String(decoding: data, as: UTF8.self))
-        }
-        if let error = response.error {
-            if let urlError = error.underlyingError as? URLError {
-                if urlError.code == .timedOut {
-                    throw urlError
-                }
-            }
-            return nil
-        }
-        if let value = response.value {
-            return value
-        } else {
-            return nil
         }
     }
 
     private func getDownloadedBundleIds() -> [String] {
         let url = GraftPointer.buildBundlesDirectory()
-        do {
-            let pathExists = FileManager.default.fileExists(atPath: url.path)
-            var files: [String] = []
-            if pathExists {
-                files = try FileManager.default.contentsOfDirectory(atPath: url.path)
-            }
-            return files
-        } catch {
+        guard FileManager.default.fileExists(atPath: url.path) else {
             return []
         }
-    }
-
-    private func getAppId() -> String? {
-        if let appId = preferences.getAppId() {
-            return appId
-        }
-        return config.appId
+        return (try? FileManager.default.contentsOfDirectory(atPath: url.path)) ?? []
     }
 
     private func getChannel() -> String? {
-        var channel: String?
-        if let _ = config.defaultChannel {
-            channel = config.defaultChannel
-        }
+        var channel = config.defaultChannel
         if let nativeChannel = getNativeChannel() {
             channel = nativeChannel
         }
-        if let _ = preferences.getChannel() {
-            channel = preferences.getChannel()
+        if let storedChannel = preferences.getChannel() {
+            channel = storedChannel
         }
         return channel
     }
@@ -657,122 +473,57 @@ import CommonCrypto
         return Bundle.main.object(forInfoDictionaryKey: "RisemaxiGraftDefaultChannel") as? String
     }
 
-    /// - Returns: The sha256 checksum of the file at the given URL.
-    private func getChecksumForFile(url: URL) throws -> String {
-        let handle = try FileHandle(forReadingFrom: url)
-        var hasher = SHA256()
-        while autoreleasepool(invoking: {
-            let nextChunk = handle.readData(ofLength: 2048)
-            guard !nextChunk.isEmpty else { return false }
-            hasher.update(data: nextChunk)
-            return true
-        }) { }
-        let digest = hasher.finalize()
-        return digest.map { String(format: "%02hhx", $0) }.joined()
-    }
-
-    /// - Returns: The current bundle ID or `nil` if no view controller was found (should never happen) or the default bundle is in use.
+    /// - Returns: The current bundle ID or `nil` if the bundle embedded in the binary is in use.
     private func getCurrentBundleId() -> String? {
-        guard let path = getCurrentCapacitorServerPath() else {
+        guard let viewController = plugin.bridge?.viewController as? CAPBridgeViewController else {
             return nil
         }
-        let bundleId = URL(fileURLWithPath: path).lastPathComponent
-        if bundleId == defaultWebAssetDir {
-            return nil
-        }
-        return bundleId
+        let bundleId = URL(fileURLWithPath: viewController.getServerBasePath()).lastPathComponent
+        return bundleId == GraftPointer.embeddedWebAssetDir ? nil : bundleId
     }
 
-    /// - Returns: The path to the current bundle directory or `nil` if no view controller was found.
-    private func getCurrentCapacitorServerPath() -> String? {
-        guard let viewController = self.plugin.bridge?.viewController as? CAPBridgeViewController else {
-            return nil
-        }
-        return viewController.getServerBasePath()
-    }
-
-    private func getDeviceId() -> String {
-        let deviceId = UIDevice.current.identifierForVendor?.uuidString ?? ""
-        return deviceId.lowercased()
-    }
-
-    /// - Returns: The next bundle ID or `nil` if the default bundle will be used.
+    /// - Returns: The next bundle ID or `nil` if the bundle embedded in the binary will be used.
     private func getNextBundleId() -> String? {
         return GraftPointer.getActiveBundleId()
     }
 
-    /// - Returns: The previous bundle ID or `nil` if the default bundle was used.
-    private func getPreviousBundleId() -> String? {
-        return preferences.getPreviousBundleId()
-    }
-
     private func getVersionCode() -> String {
-        guard let appVersionCode = Bundle.main.infoDictionary?["CFBundleVersion"] as? String else {
-            return ""
-        }
-        return appVersionCode
+        return Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? ""
     }
 
     private func getVersionName() -> String {
-        guard let appVersionName = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String else {
-            return ""
+        return Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? ""
+    }
+
+    private func nativeBuild() throws -> Int {
+        guard let nativeBuild = GraftPointer.readNativeBuild() else {
+            throw CustomError.nativeBuildInvalid
         }
-        return appVersionName
+        return nativeBuild
     }
 
     private func hasBundleById(_ bundleId: String) -> Bool {
-        let path = buildBundlePathFor(bundleId: bundleId)
-        return FileManager.default.fileExists(atPath: path)
+        return FileManager.default.fileExists(atPath: GraftPointer.buildBundleDirectory(bundleId: bundleId).path)
     }
 
-    private func loadCurrentManifest() throws -> Manifest? {
-        if let currentBundleId = getCurrentBundleId() {
-            let manifestFileUrl = buildBundleURLFor(bundleId: currentBundleId).appendingPathComponent(manifestFileName)
-            let manifestFileExists = FileManager.default.fileExists(atPath: manifestFileUrl.path)
-            if manifestFileExists {
-                return try loadManifest(file: manifestFileUrl)
-            } else {
-                return nil
-            }
-        } else {
-            let files = Bundle.main.urls(forResourcesWithExtension: nil, subdirectory: defaultWebAssetDir) ?? []
-            let manifestFileUrl = files.first { $0.lastPathComponent == manifestFileName }
-            if let manifestFileUrl = manifestFileUrl {
-                return try loadManifest(file: manifestFileUrl)
-            } else {
-                return nil
-            }
-        }
-    }
-
-    private func loadManifest(file: URL) throws -> Manifest {
-        let data = try Data(contentsOf: file)
-        let decoder = JSONDecoder()
-        let items = try decoder.decode([ManifestItem].self, from: data)
-        return Manifest(items: items)
-    }
-
-    private func notifyDownloadBundleProgressListeners(_ event: DownloadBundleProgressEvent) {
-        plugin.notifyDownloadBundleProgressListeners(event)
+    private func notifyDownloadBundleProgressListeners(bundleId: String, downloadedBytes: Int64, totalBytes: Int64) {
+        plugin.notifyDownloadBundleProgressListeners(
+            DownloadBundleProgressEvent(bundleId: bundleId, downloadedBytes: downloadedBytes, totalBytes: totalBytes)
+        )
     }
 
     private func performAutoUpdate() {
-        // Check if enough time has passed since the last check
         let now = Int64(Date().timeIntervalSince1970 * 1000)
         if lastAutoUpdateCheckTimestamp > 0 && (now - lastAutoUpdateCheckTimestamp) < autoUpdateIntervalMs {
             CAPLog.print("[", GraftPlugin.tag, "] ", "Auto-update skipped. Last check was less than 15 minutes ago.")
             return
         }
-
-        // Update the timestamp
         lastAutoUpdateCheckTimestamp = now
 
-        // Run sync in background task
         Task {
             do {
                 CAPLog.print("[", GraftPlugin.tag, "] ", "Auto-update started.")
-                let options = SyncOptions(channel: nil)
-                _ = try await sync(options)
+                _ = try await sync(SyncOptions(channel: nil))
                 CAPLog.print("[", GraftPlugin.tag, "] ", "Auto-update completed successfully.")
             } catch {
                 CAPLog.print("[", GraftPlugin.tag, "] ", "Auto-update failed: ", error.localizedDescription)
@@ -781,156 +532,101 @@ import CommonCrypto
     }
 
     private func rollback() {
-        // Set the rollback flag
         rollbackPerformed = true
-        // Set the new previous bundle ID
         let currentBundleId = getCurrentBundleId()
-        setPreviousBundleId(bundleId: currentBundleId)
-        // Perform the rollback
-        if currentBundleId != nil {
-            let targetBundleId = resolveRollbackTargetBundleId()
-            let target = targetBundleId == nil ? "default bundle." : "bundle \(targetBundleId!)."
-            CAPLog.print("[", GraftPlugin.tag, "] ", "App is not ready. Rolling back to \(target)")
-            setNextBundleById(targetBundleId)
-            setCurrentBundleById(targetBundleId)
-        } else {
-            CAPLog.print("[", GraftPlugin.tag, "] ", "App is not ready. Default bundle is already in use.")
+        preferences.setPreviousBundleId(currentBundleId)
+        guard currentBundleId != nil else {
+            CAPLog.print("[", GraftPlugin.tag, "] ", "App is not ready. Embedded bundle is already in use.")
+            return
         }
+        let targetBundleId = resolveRollbackTargetBundleId()
+        let target = targetBundleId == nil ? "the embedded bundle." : "bundle \(targetBundleId!)."
+        CAPLog.print("[", GraftPlugin.tag, "] ", "App is not ready. Rolling back to \(target)")
+        setNextBundleById(targetBundleId)
+        setCurrentBundleById(targetBundleId)
     }
 
     private func resolveRollbackTargetBundleId() -> String? {
         guard let bundleId = preferences.getLastKnownGoodBundleId() else {
             return nil
         }
-        if isBlockedBundleId(bundleId) || !hasBundleById(bundleId) {
+        if getBlockedBundleIds().contains(bundleId) || !hasBundleById(bundleId) {
             return nil
         }
         return bundleId
     }
 
     private func searchIndexHtmlFile(url: URL) -> URL? {
-        do {
-            let directoryContents = try FileManager.default.contentsOfDirectory(at: url, includingPropertiesForKeys: nil, options: [])
-            if directoryContents.isEmpty {
-                return nil
+        guard let contents = try? FileManager.default.contentsOfDirectory(at: url, includingPropertiesForKeys: [.isDirectoryKey]) else {
+            return nil
+        }
+        if let indexHtmlFile = contents.first(where: { $0.lastPathComponent == GraftPointer.indexFileName }) {
+            return indexHtmlFile
+        }
+        for fileUrl in contents {
+            var isDirectory: ObjCBool = false
+            if FileManager.default.fileExists(atPath: fileUrl.path, isDirectory: &isDirectory), isDirectory.boolValue,
+               let indexHtmlFile = searchIndexHtmlFile(url: fileUrl) {
+                return indexHtmlFile
             }
-            let fileNames = directoryContents.map { $0.lastPathComponent }
-            if fileNames.contains("index.html") {
-                return url.appendingPathComponent("index.html")
-            } else {
-                for fileUrl in directoryContents {
-                    var isDirectory: ObjCBool = false
-                    if FileManager.default.fileExists(atPath: fileUrl.path, isDirectory: &isDirectory) {
-                        if isDirectory.boolValue {
-                            if let indexHtmlFile = searchIndexHtmlFile(url: fileUrl) {
-                                return indexHtmlFile
-                            }
-                        }
-                    }
-                }
-            }
-        } catch {
-            CAPLog.print("[", GraftPlugin.tag, "] ", "Failed to search index.html file: \(error.localizedDescription)")
         }
         return nil
     }
 
-    /// - Parameter bundleId: The bundle ID to set as the current bundle. If `nil`, the default bundle will be used.
+    /// - Parameter bundleId: The bundle ID to serve now. If `nil`, the bundle embedded in the binary is served.
     private func setCurrentBundleById(_ bundleId: String?) {
-        let path = buildCapacitorServerPathFor(bundleId: bundleId)
-        setCurrentCapacitorServerPath(path: path)
-    }
-
-    private func setCurrentCapacitorServerPath(path: String) {
-        guard let viewController = self.plugin.bridge?.viewController as? CAPBridgeViewController else {
+        guard let viewController = plugin.bridge?.viewController as? CAPBridgeViewController else {
             return
         }
+        let path = bundleId == nil
+            ? GraftPointer.buildEmbeddedBundleDirectory().path
+            : GraftPointer.buildBundleDirectory(bundleId: bundleId!).path
         viewController.setServerBasePath(path: path)
-        // Notify listeners
-        notifyReloadedListeners()
+        plugin.notifyReloadedListeners()
     }
 
-    /// - Parameter bundleId: The bundle ID to set as the next bundle. If `nil`, the default bundle will be used.
+    /// - Parameter bundleId: The bundle ID to serve on the next launch. If `nil`, the bundle embedded in the binary is served.
     private func setNextBundleById(_ bundleId: String?) {
         if let bundleId = bundleId {
             GraftPointer.setActiveBundleId(bundleId)
         } else {
             GraftPointer.clearActiveBundleId()
         }
-
-        // Notify listeners
-        notifyNextBundleSetListeners(bundleId)
+        plugin.notifyNextBundleSetListeners(NextBundleSetEvent(bundleId: bundleId))
     }
 
-    private func notifyNextBundleSetListeners(_ bundleId: String?) {
-        let event = NextBundleSetEvent(bundleId: bundleId)
-        plugin.notifyNextBundleSetListeners(event)
+    private func getBlockedBundleIds() -> Set<String> {
+        guard let blockedIds = preferences.getBlockedBundleIds(), !blockedIds.isEmpty else {
+            return []
+        }
+        return Set(blockedIds.split(separator: ",").map(String.init))
     }
 
-    private func notifyReloadedListeners() {
-        plugin.notifyReloadedListeners()
+    /// Blocks a bundle only once it has failed to report ready twice running. One failure is as likely
+    /// to mean a slow cold start as a broken bundle, and blocking is permanent — a device that blocks a
+    /// good release never receives it again.
+    private func recordFailure(_ bundleId: String) {
+        let failures = bundleId == preferences.getLastFailedBundleId() ? preferences.getLastFailedCount() + 1 : 1
+        if failures >= 2 {
+            preferences.setLastFailed(nil, count: 0)
+            addBlockedBundleId(bundleId)
+            return
+        }
+        preferences.setLastFailed(bundleId, count: failures)
+        CAPLog.print("[", GraftPlugin.tag, "] ", "Bundle did not report ready: \(bundleId). It is blocked if it fails again.")
     }
 
     private func addBlockedBundleId(_ bundleId: String) {
-        var blockedList: [String] = []
-
-        // Parse existing blocked IDs
-        if let blockedIds = preferences.getBlockedBundleIds(), !blockedIds.isEmpty {
-            blockedList = blockedIds.split(separator: ",").map(String.init)
-        }
-
-        // Skip if already blocked
+        var blockedList = preferences.getBlockedBundleIds()?.split(separator: ",").map(String.init) ?? []
         if blockedList.contains(bundleId) {
             return
         }
-
-        // Remove oldest if limit reached
-        if blockedList.count >= 100 {
+        blockedList.append(bundleId)
+        while blockedList.count > 100 {
             blockedList.removeFirst()
         }
-
-        // Add new bundle
-        blockedList.append(bundleId)
-
-        // Save back to preferences
-        let newBlockedIds = blockedList.joined(separator: ",")
-        preferences.setBlockedBundleIds(newBlockedIds)
-
+        preferences.setBlockedBundleIds(blockedList.joined(separator: ","))
         CAPLog.print("[", GraftPlugin.tag, "] ", "Bundle blocked: ", bundleId)
-    }
-
-    private func isBlockedBundleId(_ bundleId: String) -> Bool {
-        guard let blockedIds = preferences.getBlockedBundleIds(), !blockedIds.isEmpty else {
-            return false
-        }
-
-        let blockedList = blockedIds.split(separator: ",").map(String.init)
-        return blockedList.contains(bundleId)
-    }
-
-    private func checkAndResetConfigIfVersionChanged() {
-        let currentVersionCode = getVersionCode()
-        let currentVersionName = getVersionName()
-        let lastVersionCode = preferences.getLastVersionCode()
-        let lastVersionName = preferences.getLastVersionName()
-
-        if lastVersionCode == nil || lastVersionName == nil || lastVersionCode != currentVersionCode || lastVersionName != currentVersionName {
-            CAPLog.print(
-                "[", GraftPlugin.tag, "] ",
-                "App version changed (last: \(lastVersionName ?? "nil")/\(lastVersionCode ?? "nil"), current: \(currentVersionName)/\(currentVersionCode)), resetting config."
-            )
-            resetConfig()
-            // Capacitor clears its own serverBasePath on a new binary; our pointer is not covered by that
-            GraftPointer.clearActiveBundleId()
-            preferences.setLastKnownGoodBundleId(nil)
-            preferences.setLastVersionCode(currentVersionCode)
-            preferences.setLastVersionName(currentVersionName)
-        }
-    }
-
-    /// - Parameter bundleId: The bundle ID to save as the previous bundle ID. If `nil`, the value will be removed.
-    private func setPreviousBundleId(bundleId: String?) {
-        preferences.setPreviousBundleId(bundleId)
     }
 
     private func startRollbackTimer() {
@@ -938,142 +634,80 @@ import CommonCrypto
             return
         }
         stopRollbackTimer()
-        rollbackDispatchWorkItem = DispatchWorkItem { [weak self] in
+        let workItem = DispatchWorkItem { [weak self] in
             self?.rollback()
         }
-        DispatchQueue.main.asyncAfter(deadline: .now() + DispatchTimeInterval.milliseconds(config.readyTimeout), execute: rollbackDispatchWorkItem!)
+        rollbackDispatchWorkItem = workItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + DispatchTimeInterval.milliseconds(config.readyTimeout), execute: workItem)
     }
 
     private func stopRollbackTimer() {
         rollbackDispatchWorkItem?.cancel()
     }
 
-    private func tryCopyCurrentBundleFile(
-        fileToCopy: ManifestItem,
-        toDirectory: URL
-    ) -> Bool {
-        do {
-            try copyCurrentBundleFile(fileToCopy: fileToCopy, toDirectory: toDirectory)
-            return true
-        } catch {
-            return false
-        }
-    }
-
     private func unzipFile(zipFile: URL) throws -> URL {
-        let destinationDirectory = zipFile.deletingPathExtension()
-        try FileManager.default.createDirectory(at: destinationDirectory, withIntermediateDirectories: true, attributes: nil)
+        let destinationDirectory = cachesDirectoryUrl.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: destinationDirectory, withIntermediateDirectories: true)
         try FileManager.default.unzipItem(at: zipFile, to: destinationDirectory)
         return destinationDirectory
     }
 
-    private func verifyFile(url: URL, checksum: String?, signature: String?) throws {
-        // Verify the signature
-        if let publicKey = self.config.publicKey {
-            guard let signature = signature else {
-                throw CustomError.signatureMissing
-            }
-            // Verify the signature
-            let verified: Bool
-            do {
-                verified = try self.verifySignatureForFile(url: url, signature: signature, publicKey: publicKey)
-            } catch {
-                throw CustomError.signatureVerificationFailed
-            }
-            if !verified {
-                throw CustomError.signatureVerificationFailed
-            }
-        }
-        // Verify the checksum
-        else if let expectedChecksum = checksum {
-            // Calculate the checksum
-            let receivedChecksum: String
-            do {
-                receivedChecksum = try self.getChecksumForFile(url: url)
-            } catch {
-                throw CustomError.checksumCalculationFailed
-            }
-            if receivedChecksum != expectedChecksum {
-                throw CustomError.checksumMismatch
-            }
+    private func verifyChecksum(url: URL, expected: String) throws {
+        let handle = try FileHandle(forReadingFrom: url)
+        defer { try? handle.close() }
+        var hasher = SHA256()
+        while autoreleasepool(invoking: {
+            let nextChunk = handle.readData(ofLength: 8192)
+            guard !nextChunk.isEmpty else { return false }
+            hasher.update(data: nextChunk)
+            return true
+        }) { }
+        let checksum = hasher.finalize().map { String(format: "%02hhx", $0) }.joined()
+        guard checksum == expected else {
+            throw CustomError.checksumMismatch
         }
     }
 
-    private func verifySignatureForFile(url: URL, signature: String, publicKey: String) throws -> Bool {
+    private func loadPublicKey() throws -> SecKey {
+        guard let publicKey = config.publicKey else {
+            throw CustomError.publicKeyMissing
+        }
         let publicKeyAsBase64 = publicKey
             .replacingOccurrences(of: "-----BEGIN PUBLIC KEY-----", with: "")
             .replacingOccurrences(of: "-----END PUBLIC KEY-----", with: "")
             .replacingOccurrences(of: "\n", with: "")
-        guard let publicKeyData = Data(base64Encoded: publicKeyAsBase64) else {
-            CAPLog.print("[", GraftPlugin.tag, "] ", "Failed to decode public key.")
-            return false
-        }
-        let publicKeyAttributes: [CFString: Any] = [
+        let attributes: [CFString: Any] = [
             kSecAttrKeyType: kSecAttrKeyTypeRSA,
-            kSecAttrKeyClass: kSecAttrKeyClassPublic,
-            kSecAttrKeySizeInBits: 2048,
-            kSecReturnPersistentRef: true
+            kSecAttrKeyClass: kSecAttrKeyClassPublic
         ]
-        var secKeyCreateWithDataError: Unmanaged<CFError>?
-        guard let publicKey = SecKeyCreateWithData(publicKeyData as CFData, publicKeyAttributes as CFDictionary, &secKeyCreateWithDataError) else {
-            if let error = secKeyCreateWithDataError?.takeRetainedValue() {
+        var error: Unmanaged<CFError>?
+        guard let publicKeyData = Data(base64Encoded: publicKeyAsBase64),
+              let key = SecKeyCreateWithData(publicKeyData as CFData, attributes as CFDictionary, &error) else {
+            if let error = error?.takeRetainedValue() {
                 CAPLog.print("[", GraftPlugin.tag, "] ", "Failed to create public key with error: \(error)")
             }
-            return false
+            throw CustomError.publicKeyInvalid
         }
+        return key
+    }
+
+    private func verifySignature(content: Data, signature: String, publicKey: SecKey) throws {
         guard let signatureData = Data(base64Encoded: signature) else {
-            CAPLog.print("[", GraftPlugin.tag, "] ", "Failed to decode signature.")
-            return false
+            throw CustomError.signatureVerificationFailed
         }
-
-        // Create SHA256 digest
-        var digestContext = CC_SHA256_CTX()
-        CC_SHA256_Init(&digestContext)
-
-        // Update the digest with the file's data
-        let handle = try FileHandle(forReadingFrom: url)
-        while autoreleasepool(invoking: {
-            let nextChunk = handle.readData(ofLength: 2048)
-            guard !nextChunk.isEmpty else { return false }
-            nextChunk.withUnsafeBytes {
-                _ = CC_SHA256_Update(&digestContext, $0.baseAddress, CC_LONG(nextChunk.count))
-            }
-            return true
-        }) { }
-
-        // Compute the digest
-        var digest = Data(count: Int(CC_SHA256_DIGEST_LENGTH))
-        digest.withUnsafeMutableBytes {
-            _ = CC_SHA256_Final($0.bindMemory(to: UInt8.self).baseAddress, &digestContext)
-        }
-
-        // Verify the signature
-        var secKeyVerifySignatureError: Unmanaged<CFError>?
-        let signatureAlgorithm = SecKeyAlgorithm.rsaSignatureDigestPKCS1v15SHA256
-        let verificationResult = SecKeyVerifySignature(publicKey, signatureAlgorithm, digest as CFData, signatureData as CFData, &secKeyVerifySignatureError)
-        if let error = secKeyVerifySignatureError?.takeRetainedValue() {
+        var error: Unmanaged<CFError>?
+        let verified = SecKeyVerifySignature(
+            publicKey,
+            .rsaSignatureMessagePKCS1v15SHA256,
+            content as CFData,
+            signatureData as CFData,
+            &error
+        )
+        if let error = error?.takeRetainedValue() {
             CAPLog.print("[", GraftPlugin.tag, "] ", "Failed to verify signature with error: \(error)")
         }
-        return verificationResult
-    }
-}
-
-extension DispatchQueue {
-    static func background(background: (() -> Void)? = nil, completion: (() -> Void)? = nil) {
-        DispatchQueue.global(qos: .userInitiated).async {
-            background?()
-            if let completion = completion {
-                DispatchQueue.main.async {
-                    completion()
-                }
-            }
+        guard verified else {
+            throw CustomError.signatureVerificationFailed
         }
-    }
-}
-
-extension Progress {
-    convenience init(totalUnitCount: Int64, completedUnitCount: Int64) {
-        self.init(totalUnitCount: totalUnitCount)
-        self.completedUnitCount = completedUnitCount
     }
 }
