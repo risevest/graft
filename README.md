@@ -10,9 +10,11 @@ See `NOTICE` and `UPSTREAM.md`.
 ## Status
 
 Pre-release. The lifecycle, the native pointer and the self-hosted protocol below are implemented on
-both platforms. Binary deltas are not: a release still transfers whole files, reusing every file the
-running bundle already has at the same digest. `requires`/`provides` contract gating is not
-implemented either — `minNativeBuild` is the only compatibility gate today.
+both platforms. Binary deltas are half-built: the patch archive format, its generator and a
+reference applier ship in `tools/`, but no native apply path exists yet, so a release still
+transfers whole files, reusing every file the running bundle already has at the same digest.
+`requires`/`provides` contract gating is not implemented either — `minNativeBuild` is the only
+compatibility gate today.
 
 ## Install
 
@@ -126,6 +128,56 @@ an installed bundle is exactly the signed file set. The manifest is written as
 `graft-manifest.json`; ship one at `public/graft-manifest.json` in the native build so the first OTA
 can reuse the embedded files instead of downloading them.
 
+### Patch archive
+
+A release may also be transferred as a patch against a bundle the device already has. One archive
+per version pair: `tar` containing a `plan.json` and the per-file payloads, compressed with
+zstd-19.
+
+```jsonc
+{
+  "schema": 1,
+  "from": "r-1041",
+  "to": "r-1042",
+  "ops": [
+    { "op": "keep", "href": "assets/app-Ba9.js", "from": "assets/app-Ba9.js" },
+    {
+      "op": "patch",
+      "href": "assets/index-D6T.js",
+      "from": "assets/index-4ws.js",
+      "patch": "p/0.patch",
+    },
+    { "op": "add", "href": "assets/new-Qz1.js", "data": "a/0.bin" },
+    { "op": "delete", "href": "assets/gone-Xy2.js" },
+  ],
+}
+```
+
+Each `p/*.patch` is the output of `zstd -19 --long=27 --patch-from <base>`, computed over
+**uncompressed** bytes — diffing two already-compressed files is near-useless, because deflate
+divergence cascades.
+
+**The plan is not trusted.** It says how to reconstruct a file, never whether the result is
+acceptable. Reconstruction is driven by the signed manifest's file list, and every output file is
+verified against its `sha256` from that manifest before the bundle is eligible to run. A manifest
+entry with no corresponding op is an error, and any failure — a missing base, a patch that will not
+apply, a digest mismatch — falls back to a full download rather than installing something unverified.
+
+Bases are paired per file, not by name: content-hashed chunk names change every release, so the
+generator picks the base that yields the smallest patch among same-extension candidates and stores
+that choice in the op. If no base beats simply shipping the file, it becomes an `add`.
+
+```sh
+node tools/make-patch.mjs  --old <old bundle> --new <new bundle> --out patch.tar.zst
+node tools/apply-patch.mjs --base <old bundle> --patch patch.tar.zst \
+                           --manifest <new manifest> --out <dir>
+```
+
+Both read `graft-manifest.json` from the bundle directories. `apply-patch.mjs` is a reference
+implementation and a conformance check for the native apply paths — it is not used on device.
+Measured on a real 98-file bundle, a one-word copy change produces a **5,456-byte archive** against
+**1,622 kB** for the same release transferred file-by-file.
+
 ### Requirements on the consuming app
 
 **The build number must be an integer, and must mean the same thing on both platforms.**
@@ -163,7 +215,7 @@ Graft already knows which release it is serving, so read it from here instead of
 import { releaseIdentity } from '@risemaxi/graft';
 
 const identity = releaseIdentity(); // { releaseId, nativeBuild } | null
-Sentry.init({ release: identity?.releaseId ?? 'unknown', /* … */ });
+Sentry.init({ release: identity?.releaseId ?? 'unknown' /* … */ });
 ```
 
 It is published to the page before any app code runs and resolves synchronously, so it can be passed
