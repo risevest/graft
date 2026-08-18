@@ -56,10 +56,13 @@ enum GraftPatch {
             let content: [UInt8]
             switch kind {
             case "keep":
-                content = [UInt8](try Data(contentsOf: base.appendingPathComponent(try safeHref(operation, "from"))))
+                content = try readBase(base, operation)
             case "patch":
-                let source = [UInt8](try Data(contentsOf: base.appendingPathComponent(try safeHref(operation, "from"))))
-                content = try decompress(try payload(payloads, operation), prefix: source, expectedSize: file.size)
+                content = try decompress(
+                    try payload(payloads, operation),
+                    prefix: try readBase(base, operation),
+                    expectedSize: file.size
+                )
             case "add":
                 content = try payload(payloads, operation)
             default:
@@ -125,6 +128,15 @@ enum GraftPatch {
             throw CustomError.patchFailed
         }
         return output
+    }
+
+    /// A base the plan names but the bundle does not have is a patch failure like any other, not a
+    /// stray Foundation error — the caller logs it and falls back to a full download either way.
+    private static func readBase(_ base: URL, _ operation: [String: Any]) throws -> [UInt8] {
+        guard let data = try? Data(contentsOf: base.appendingPathComponent(try safeHref(operation, "from"))) else {
+            throw CustomError.patchFailed
+        }
+        return [UInt8](data)
     }
 
     private static func payload(_ payloads: [[UInt8]], _ operation: [String: Any]) throws -> [UInt8] {
