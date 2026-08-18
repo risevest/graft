@@ -561,15 +561,20 @@ public class Graft {
         return embedded == null ? null : embedded.getId();
     }
 
+    /**
+     * A patch is addressed by path rather than by query, so every request this plugin makes can be
+     * served by a static bucket with no compute in front of it. A server that wants to synthesise a
+     * missing pair on demand can still intercept the path; one that does not simply answers 404 and
+     * the device downloads the files it cannot reuse.
+     */
     @Nullable
     private HttpUrl buildPatchUrl(@NonNull String from, @NonNull String to) {
         try {
             return parseServerUrl()
                 .newBuilder()
                 .addPathSegment("v1")
-                .addPathSegment("patch")
-                .addQueryParameter("from", from)
-                .addQueryParameter("to", to)
+                .addPathSegment("patches")
+                .addPathSegment(from + "__" + to + ".gpz")
                 .build();
         } catch (Exception exception) {
             return null;

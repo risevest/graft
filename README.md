@@ -165,9 +165,15 @@ long-name handling to get wrong.
 }
 ```
 
-Each `p/*.patch` is the output of `zstd -19 --long=27 --patch-from <base>`, computed over
+Each payload is the output of `zstd -19 --long=27 --patch-from <base>`, computed over
 **uncompressed** bytes — diffing two already-compressed files is near-useless, because deflate
 divergence cascades.
+
+The device fetches `GET <serverUrl>/v1/patches/<from>__<to>.gpz`. Addressing a patch by path rather
+than by query is deliberate: it is what lets every request graft makes be answered by a static
+bucket with no compute in front of it. A server that wants to synthesise a missing pair on demand
+can still intercept that path; one that does not answers 404 and the device downloads the files it
+cannot reuse.
 
 **The plan is not trusted.** It says how to reconstruct a file, never whether the result is
 acceptable. Reconstruction is driven by the signed manifest's file list, and every output file is
@@ -179,16 +185,46 @@ Bases are paired per file, not by name: content-hashed chunk names change every 
 generator picks the base that yields the smallest patch among same-extension candidates and stores
 that choice in the op. If no base beats simply shipping the file, it becomes an `add`.
 
-```sh
-node tools/make-patch.mjs  --old <old bundle> --new <new bundle> --out patch.gpz
-node tools/apply-patch.mjs --base <old bundle> --patch patch.gpz \
-                           --manifest <new manifest> --out <dir>
-```
-
-Both read `graft-manifest.json` from the bundle directories. `apply-patch.mjs` is a reference
-implementation and a conformance check for the native apply paths — it is not used on device.
 Measured on a real 98-file bundle, a one-word copy change produces a **4,253-byte archive** against
 **1,622 kB** for the same release transferred file-by-file.
+
+## Release tooling
+
+Everything the device validates, graft also produces. The rules are subtle enough — canonical key
+order, never re-serialising between signing and upload, pairing patch bases by content rather than
+by name — that a consumer reimplementing them will get one of them wrong, and the failure surfaces
+as a signature error on a manifest that was signed correctly.
+
+```sh
+graft manifest --dir dist --id r-1042 --counter 1042 --min-native-build 17862387 \
+               --channel production --not-before 1786238700 --expires-at 1793928700
+GRAFT_SIGNING_KEY="$(cat private.pem)" graft sign dist/graft-manifest.json manifest.sig
+graft patch --old <previous bundle> --new dist --out r-1041__r-1042.gpz
+graft apply --base <previous bundle> --patch r-1041__r-1042.gpz \
+            --manifest dist/graft-manifest.json --out <dir>
+```
+
+`graft apply` is a reference implementation and a conformance check for the native apply paths — it
+is not what runs on device. What the release pipeline owns is the part graft cannot know: where the
+files are hosted, which counter a release gets, and when a channel points at it.
+
+### As a bundler plugin
+
+The manifest can also be written as part of the build, which removes the second command and with it
+the chance of signing a stale directory:
+
+```ts
+import { vite as graftManifest } from '@risemaxi/graft/tools/unplugin.mjs';
+
+graftManifest({ dir: 'dist', id, counter, minNativeBuild });
+```
+
+`unplugin` is an optional peer, and the same factory exports `rollup`, `rolldown`, `webpack`,
+`rspack`, `esbuild` and `farm` builds. It hooks `writeBundle` and nothing else — the one hook every
+bundler unifies, and one that deliberately carries no arguments. That suits this exactly: the
+bundler is being asked for the timing, not for an inventory. A bundler's record of what it emitted
+is not the shipped file set, because static assets are copied in without passing through it, and
+every file has to be read off disk to be digested anyway.
 
 ### Requirements on the consuming app
 

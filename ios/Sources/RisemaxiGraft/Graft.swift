@@ -320,14 +320,18 @@ import Capacitor
         return GraftPointer.buildEmbeddedBundleDirectory()
     }
 
+    /// A patch is addressed by path rather than by query, so every request this plugin makes can be
+    /// served by a static bucket with no compute in front of it. A server that wants to synthesise a
+    /// missing pair on demand can still intercept the path; one that does not simply answers 404 and
+    /// the device downloads the files it cannot reuse.
     private func buildPatchUrl(from: String, to: String) -> URL? {
-        guard let serverUrl = try? parseServerUrl(),
-              var components = URLComponents(url: serverUrl, resolvingAgainstBaseURL: false) else {
+        guard let serverUrl = try? parseServerUrl() else {
             return nil
         }
-        components.path = (components.path as NSString).appendingPathComponent("v1/patch")
-        components.queryItems = [URLQueryItem(name: "from", value: from), URLQueryItem(name: "to", value: to)]
-        return components.url
+        return serverUrl
+            .appendingPathComponent("v1")
+            .appendingPathComponent("patches")
+            .appendingPathComponent("\(from)__\(to).gpz")
     }
 
     /// Records the release as installed before it is staged, so a bundle that never boots still raises

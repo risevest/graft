@@ -11,10 +11,14 @@
     "android/build.gradle",
     "dist/",
     "ios/Sources/",
+    "tools/",
     "RisemaxiGraft.podspec",
     "Package.swift",
     "NOTICE"
   ],
+  "bin": {
+    "graft": "tools/cli.mjs"
+  },
   "author": "Rise",
   "license": "MIT",
   "repository": {
@@ -60,7 +64,13 @@
     "typescript": "5.9.3"
   },
   "peerDependencies": {
-    "@capacitor/core": ">=8.0.0"
+    "@capacitor/core": ">=8.0.0",
+    "unplugin": "^3.0.0"
+  },
+  "peerDependenciesMeta": {
+    "unplugin": {
+      "optional": true
+    }
   },
   "eslintConfig": {
     "extends": "@ionic/eslint-config/recommended"
