@@ -9,12 +9,11 @@ See `NOTICE` and `UPSTREAM.md`.
 
 ## Status
 
-Pre-release. The lifecycle, the native pointer and the self-hosted protocol below are implemented on
-both platforms. Binary deltas are half-built: the patch archive format, its generator and a
-reference applier ship in `tools/`, but no native apply path exists yet, so a release still
-transfers whole files, reusing every file the running bundle already has at the same digest.
-`requires`/`provides` contract gating is not implemented either — `minNativeBuild` is the only
-compatibility gate today.
+Pre-release. The lifecycle, the native pointer, the self-hosted protocol and binary deltas are
+implemented on both platforms; a release is fetched as a patch when one is published and falls back
+to whole files otherwise. The apply paths compile and their zstd semantics are verified against a
+real bundle, but neither has yet run end to end on a device. `requires`/`provides` contract gating
+is not implemented — `minNativeBuild` is the only compatibility gate today.
 
 ## Install
 
@@ -131,8 +130,14 @@ can reuse the embedded files instead of downloading them.
 ### Patch archive
 
 A release may also be transferred as a patch against a bundle the device already has. One archive
-per version pair: `tar` containing a `plan.json` and the per-file payloads, compressed with
-zstd-19.
+per version pair: an 8-byte `GRAFTP1\n` magic, a length-prefixed plan, then the payloads as a
+counted sequence of length-prefixed blocks, the whole thing compressed with zstd-19. Lengths are
+unsigned 32-bit big-endian.
+
+Payloads are referenced by index rather than by name, so the archive contains no paths at all — the
+only paths anywhere are the manifest hrefs, which are already validated. That also keeps the reader
+to a few dozen lines on each platform, where a tar reader would be a few hundred with pax and GNU
+long-name handling to get wrong.
 
 ```jsonc
 {
@@ -145,9 +150,9 @@ zstd-19.
       "op": "patch",
       "href": "assets/index-D6T.js",
       "from": "assets/index-4ws.js",
-      "patch": "p/0.patch",
+      "payload": 0,
     },
-    { "op": "add", "href": "assets/new-Qz1.js", "data": "a/0.bin" },
+    { "op": "add", "href": "assets/new-Qz1.js", "payload": 1 },
     { "op": "delete", "href": "assets/gone-Xy2.js" },
   ],
 }
@@ -168,14 +173,14 @@ generator picks the base that yields the smallest patch among same-extension can
 that choice in the op. If no base beats simply shipping the file, it becomes an `add`.
 
 ```sh
-node tools/make-patch.mjs  --old <old bundle> --new <new bundle> --out patch.tar.zst
-node tools/apply-patch.mjs --base <old bundle> --patch patch.tar.zst \
+node tools/make-patch.mjs  --old <old bundle> --new <new bundle> --out patch.gpz
+node tools/apply-patch.mjs --base <old bundle> --patch patch.gpz \
                            --manifest <new manifest> --out <dir>
 ```
 
 Both read `graft-manifest.json` from the bundle directories. `apply-patch.mjs` is a reference
 implementation and a conformance check for the native apply paths — it is not used on device.
-Measured on a real 98-file bundle, a one-word copy change produces a **5,456-byte archive** against
+Measured on a real 98-file bundle, a one-word copy change produces a **4,253-byte archive** against
 **1,622 kB** for the same release transferred file-by-file.
 
 ### Requirements on the consuming app

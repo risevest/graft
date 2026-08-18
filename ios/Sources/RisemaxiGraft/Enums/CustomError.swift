@@ -17,6 +17,8 @@ public enum CustomError: Error {
     case manifestUrlInvalid
     case nativeBuildInvalid
     case notInitialized
+    case patchChecksumMismatch
+    case patchFailed
     case publicKeyInvalid
     case publicKeyMissing
     case serverUrlInvalid
@@ -63,6 +65,10 @@ extension CustomError: LocalizedError {
             return NSLocalizedString("CFBundleVersion must be an integer to compare against minNativeBuild.", comment: "nativeBuildInvalid")
         case .notInitialized:
             return NSLocalizedString("Graft failed to initialize.", comment: "notInitialized")
+        case .patchChecksumMismatch:
+            return NSLocalizedString("A patched file did not match the manifest.", comment: "patchChecksumMismatch")
+        case .patchFailed:
+            return NSLocalizedString("The patch could not be applied.", comment: "patchFailed")
         case .publicKeyInvalid:
             return NSLocalizedString("Invalid public key.", comment: "publicKeyInvalid")
         case .publicKeyMissing:

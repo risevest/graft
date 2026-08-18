@@ -255,16 +255,12 @@ import Capacitor
         let directory = cachesDirectoryUrl.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         do {
-            let currentHrefBySha256 = loadCurrentHrefBySha256()
-            var filesToDownload = [ManifestFile]()
-            for file in manifest.files {
-                guard let currentHref = currentHrefBySha256[file.sha256],
-                      copyCurrentBundleFile(currentHref: currentHref, file: file, to: directory) else {
-                    filesToDownload.append(file)
-                    continue
-                }
+            let patched = await installFromPatch(manifest: manifest, to: directory)
+            if !patched {
+                try? FileManager.default.removeItem(at: directory)
+                try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+                try await installByDownload(manifest: manifest, manifestUrl: manifestUrl, to: directory)
             }
-            try await downloadBundleFiles(manifestUrl: manifestUrl, files: filesToDownload, to: directory, bundleId: manifest.id)
 
             guard FileManager.default.fileExists(atPath: directory.appendingPathComponent(GraftPointer.indexFileName).path) else {
                 throw CustomError.bundleIndexHtmlMissing
@@ -276,6 +272,62 @@ import Capacitor
             try? FileManager.default.removeItem(at: directory)
             throw error
         }
+    }
+
+    /// A patch is an optimisation, never a requirement: any failure — no patch published, a transfer
+    /// error, a patch that will not apply, a digest that does not match the signed manifest — discards
+    /// whatever it produced and installs the release the ordinary way.
+    private func installFromPatch(manifest: Manifest, to directory: URL) async -> Bool {
+        guard let baseReleaseId = resolveBaseReleaseId(),
+              let patchUrl = buildPatchUrl(from: baseReleaseId, to: manifest.id) else {
+            return false
+        }
+        let archive = cachesDirectoryUrl.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: archive) }
+        do {
+            try await httpClient.download(url: patchUrl, to: archive, callback: nil)
+            try GraftPatch.apply(archive: archive, base: currentBundleDirectory(), manifest: manifest, to: directory)
+            return true
+        } catch {
+            CAPLog.print("[", GraftPlugin.tag, "] ", "No usable patch, downloading the full bundle: \(error.localizedDescription)")
+            return false
+        }
+    }
+
+    private func installByDownload(manifest: Manifest, manifestUrl: URL, to directory: URL) async throws {
+        let currentHrefBySha256 = loadCurrentHrefBySha256()
+        var filesToDownload = [ManifestFile]()
+        for file in manifest.files {
+            guard let currentHref = currentHrefBySha256[file.sha256],
+                  copyCurrentBundleFile(currentHref: currentHref, file: file, to: directory) else {
+                filesToDownload.append(file)
+                continue
+            }
+        }
+        try await downloadBundleFiles(manifestUrl: manifestUrl, files: filesToDownload, to: directory, bundleId: manifest.id)
+    }
+
+    /// Which release the device can patch against — the staged bundle if there is one, otherwise the
+    /// bundle compiled into the binary.
+    private func resolveBaseReleaseId() -> String? {
+        getCurrentBundleId() ?? GraftPointer.readEmbeddedManifest()?.id
+    }
+
+    private func currentBundleDirectory() -> URL {
+        if let currentBundleId = getCurrentBundleId() {
+            return GraftPointer.buildBundleDirectory(bundleId: currentBundleId)
+        }
+        return GraftPointer.buildEmbeddedBundleDirectory()
+    }
+
+    private func buildPatchUrl(from: String, to: String) -> URL? {
+        guard let serverUrl = try? parseServerUrl(),
+              var components = URLComponents(url: serverUrl, resolvingAgainstBaseURL: false) else {
+            return nil
+        }
+        components.path = (components.path as NSString).appendingPathComponent("v1/patch")
+        components.queryItems = [URLQueryItem(name: "from", value: from), URLQueryItem(name: "to", value: to)]
+        return components.url
     }
 
     /// Records the release as installed before it is staged, so a bundle that never boots still raises
