@@ -66,7 +66,7 @@ manifest before a bundle is installed.
       "counter": 1042,
       "rollout": 25,
       "minNativeBuild": 17862387,
-      "manifest": "/v1/releases/r-1042/manifest.json",
+      "manifest": "/v1/releases/r-1042/graft-manifest.json",
       "sig": "<base64 RSA PKCS#1 v1.5 over SHA-256 of the manifest bytes>",
     },
   ],
@@ -79,6 +79,12 @@ the device stays put. `killSwitch` clears the pointer, so the next launch serves
 
 `manifest` is resolved against the channel document's URL and must land on `serverUrl`'s origin.
 Release files are fetched as siblings of the manifest — `<manifest dir>/<href>`.
+
+**Serve the manifest as `graft-manifest.json`.** Because files are siblings of it, a release
+containing a file of the same name resolves to the same URL and one overwrites the other — and
+`manifest.json` is a file almost every web app ships. `graft-manifest.json` is safe because the
+generator excludes that name from the file set by construction. A manifest whose file list would
+collide is rejected, so this cannot ship silently, but the error is easier to avoid than to read.
 
 ### Rollout bucket
 
@@ -147,9 +153,9 @@ discard every staged bundle, which is the silent downgrade this rule exists to p
 Bundlers name chunks after a hash of their contents, and an update only reuses a file when its name
 already exists on the device. So a value that changes every release — a crash reporter's release
 identifier is the usual one — renames the chunk holding it, renames every chunk that references that
-one, and cascades. Measured on a real app: changing only the release identifier left **21 of 98
-files different, 5.8 MB of 9.5 MB**, though the identifier appeared in just two of them. The reuse
-this plugin relies on quietly stops working, and nothing tells you.
+one, and cascades. Measured on a real app, a one-word source change touching the entry chunk left
+**19 of 98 files different, 5.74 MB of 9.62 MB** (~1.3 MB gzipped). An identifier compiled into that
+chunk makes you pay the same cost on every release, including ones that changed no code at all.
 
 Graft already knows which release it is serving, so read it from here instead of compiling one in:
 

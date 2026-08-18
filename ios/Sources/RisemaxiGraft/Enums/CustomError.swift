@@ -13,6 +13,7 @@ public enum CustomError: Error {
     case installFailed
     case manifestExpired
     case manifestMismatch
+    case manifestNameCollision
     case manifestUrlInvalid
     case nativeBuildInvalid
     case notInitialized
@@ -52,6 +53,10 @@ extension CustomError: LocalizedError {
             return NSLocalizedString("The manifest is not valid at the current time.", comment: "manifestExpired")
         case .manifestMismatch:
             return NSLocalizedString("The manifest does not describe an acceptable release.", comment: "manifestMismatch")
+        case .manifestNameCollision:
+            return NSLocalizedString(
+                "A file in the release has the same name as the manifest, so one overwrites the other. Serve the manifest as graft-manifest.json.",
+                comment: "manifestNameCollision")
         case .manifestUrlInvalid:
             return NSLocalizedString("The manifest URL is not on the configured server.", comment: "manifestUrlInvalid")
         case .nativeBuildInvalid:

@@ -244,6 +244,7 @@ import Capacitor
         try verifySignature(content: manifestData, signature: release.sig, publicKey: publicKey)
         let manifest = try JSONDecoder().decode(Manifest.self, from: manifestData)
         try verifyManifestIsAcceptable(manifest, release: release, channel: channel)
+        try verifyNoFileCollidesWithManifest(manifest, manifestUrl: manifestUrl)
 
         try await install(manifest: manifest, manifestData: manifestData, manifestUrl: manifestUrl)
         stageRelease(bundleId: manifest.id, counter: release.counter)
@@ -285,6 +286,16 @@ import Capacitor
         }
         if bundleId != getCurrentBundleId() {
             setNextBundleById(bundleId)
+        }
+    }
+
+    /// Release files are fetched as siblings of the manifest, so a file named like the manifest and the
+    /// manifest itself resolve to one URL and whichever is published last wins. Left undetected that
+    /// surfaces as a signature failure on a manifest the publisher signed correctly.
+    private func verifyNoFileCollidesWithManifest(_ manifest: Manifest, manifestUrl: URL) throws {
+        let manifestFileName = manifestUrl.lastPathComponent
+        if manifest.files.contains(where: { $0.href == manifestFileName }) {
+            throw CustomError.manifestNameCollision
         }
     }
 

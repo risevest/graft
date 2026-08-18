@@ -398,6 +398,7 @@ public class Graft {
                         verifySignature(manifestBytes, release.getSignature(), publicKey);
                         Manifest manifest = new Manifest(new JSONObject(new String(manifestBytes, StandardCharsets.UTF_8)));
                         verifyManifestIsAcceptable(manifest, release, channel);
+                        verifyNoFileCollidesWithManifest(manifestUrl, manifest);
                         installManifest(manifestUrl, manifest, manifestBytes, completion);
                     } catch (Exception exception) {
                         completion.error(exception);
@@ -474,6 +475,20 @@ public class Graft {
         }
         if (!bundleId.equals(getCurrentBundleId())) {
             setNextBundleById(bundleId);
+        }
+    }
+
+    /**
+     * Release files are fetched as siblings of the manifest, so a file named like the manifest and the
+     * manifest itself resolve to one URL and whichever is published last wins. Left undetected that
+     * surfaces as a signature failure on a manifest the publisher signed correctly.
+     */
+    private void verifyNoFileCollidesWithManifest(@NonNull HttpUrl manifestUrl, @NonNull Manifest manifest) throws Exception {
+        String manifestFileName = manifestUrl.pathSegments().get(manifestUrl.pathSize() - 1);
+        for (ManifestFile file : manifest.getFiles()) {
+            if (file.getHref().equals(manifestFileName)) {
+                throw new Exception(GraftPlugin.ERROR_MANIFEST_NAME_COLLISION);
+            }
         }
     }
 
