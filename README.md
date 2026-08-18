@@ -29,8 +29,15 @@ Then serve the staged bundle from the pre-WebView hook on each platform:
 - **iOS** — use `GraftViewController` as the root view controller, or override
   `instanceDescriptor()` and assign `GraftPointer.resolveActiveBundleDirectory()` to `appLocation`.
 
-The app must call `Graft.ready()` once it has booted. With the default `readyTimeout` of 10 s, a
-bundle that never reports is rolled back to the last one that did.
+The app must call `Graft.ready()`. With the default `readyTimeout` of 10 s, a bundle that never
+reports is rolled back to the last one that did.
+
+**Call it at the end of module initialisation, not from a framework "app ready" hook.** The watchdog
+asks one question — did this bundle's entry chunk parse and evaluate — and reaching the end of the
+entry module is precisely that answer. A later signal cannot answer it: a bundle broken at module
+init never reaches the hook either way, and a bundle whose lazily-loaded chunks are broken is already
+past the hook and fails on interaction, where a rollback would not have helped. Signalling late only
+widens the window in which a healthy bundle is reverted for being slow.
 
 ## Configuration
 
