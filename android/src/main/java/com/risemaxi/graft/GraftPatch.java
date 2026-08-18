@@ -74,14 +74,10 @@ final class GraftPatch {
             String kind = operation.getString("op");
             switch (kind) {
                 case "keep":
-                    content = base.read(safeHref(operation.getString("from")));
+                    content = readBase(base, operation);
                     break;
                 case "patch":
-                    content = patch(
-                        base.read(safeHref(operation.getString("from"))),
-                        payloadAt(payloads, operation.getInt("payload")),
-                        file.getSize()
-                    );
+                    content = patch(readBase(base, operation), payloadAt(payloads, operation.getInt("payload")), file.getSize());
                     break;
                 case "add":
                     content = payloadAt(payloads, operation.getInt("payload"));
@@ -160,6 +156,19 @@ final class GraftPatch {
             out.write(chunk, 0, read);
         }
         return out.toByteArray();
+    }
+
+    /**
+     * A base the plan names but the bundle does not have is a patch failure like any other, not a stray
+     * filesystem error — the caller logs it and falls back to a full download either way.
+     */
+    @NonNull
+    private static byte[] readBase(@NonNull BaseReader base, @NonNull JSONObject operation) throws Exception {
+        try {
+            return base.read(safeHref(operation.getString("from")));
+        } catch (Exception exception) {
+            throw new Exception(GraftPlugin.ERROR_PATCH_FAILED);
+        }
     }
 
     @NonNull
