@@ -296,6 +296,23 @@ bun run verify:android    # needs JDK 21 and ANDROID_HOME
 bun run verify:ios        # needs Xcode
 ```
 
+Those three only compile. To exercise the apply path on both platforms against a real bundle and a
+set of deliberately malformed archives:
+
+```sh
+FIXTURES=<dir> verify/run.sh
+```
+
+The sources it builds are symlinks to the shipping ones, so this runs the code that runs on a device
+rather than a copy of it. `verify/run.sh` explains what the fixture directory needs and how to
+generate it; use a realistic bundle, because a one-file marker exercises none of the base pairing or
+hash cascade that makes any of this worth testing.
+
+Every malformed archive must be rejected, and none may leave behind a file whose digest is not the
+signed manifest's. The case that matters most is `wrong-content` — an op pointed at valid bytes from
+the wrong file. A corrupted zstd frame fails to decompress before any digest is computed, so it
+never reaches the check the whole design rests on; only that case does.
+
 ## Licence
 
 MIT. Copyright (c) 2022 Robin Genz, Copyright (c) 2026 Rise.
