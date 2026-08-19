@@ -208,6 +208,35 @@ graft apply --base <previous bundle> --patch r-1041__r-1042.gpz \
 is not what runs on device. What the release pipeline owns is the part graft cannot know: where the
 files are hosted, which counter a release gets, and when a channel points at it.
 
+### Deriving the plugin contract
+
+A bundle can only reach native code through a `registerPlugin` proxy, so the set of names it passes
+to `registerPlugin` _is_ its contract. `graftRequires` collects them while the bundle is built and
+writes them out:
+
+```ts
+import { requiresVite as graftRequires } from '@risemaxi/graft/tools/unplugin.mjs';
+
+graftRequires({ out: 'graft-requires.json' });
+```
+
+```sh
+graft manifest --dir dist --requires graft-requires.json …
+```
+
+It must run inside the build. Minification rewrites the call sites — a built bundle contains zero
+recognisable `registerPlugin(` calls — so there is nothing to scan afterwards.
+
+Two things make a derived contract untrustworthy, and both fail the build rather than warn: a
+`registerPlugin` call whose name is not a literal, and first-party code reaching plugins through
+`Capacitor.Plugins`. A contract that is too small is worse than none, because the device then accepts
+a bundle it cannot run.
+
+Only calls in modules importing `registerPlugin` from `@capacitor/core` count. The name is not
+Capacitor's alone — gsap exports one too — and matching on the call alone reports every
+`gsap.registerPlugin(CSSPlugin)` as an underivable plugin. The `Capacitor.Plugins` check is likewise
+scoped to first-party modules, because Capacitor's own bridge reaches plugins that way by design.
+
 ### As a bundler plugin
 
 The manifest can also be written as part of the build, which removes the second command and with it

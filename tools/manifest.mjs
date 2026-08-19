@@ -46,6 +46,7 @@ export function buildManifest({
   channel,
   notBefore,
   expiresAt,
+  requires,
 }) {
   for (const [name, value] of [
     ['dir', dir],
@@ -84,6 +85,15 @@ export function buildManifest({
     minNativeBuild: ordinal('minNativeBuild', minNativeBuild),
     files,
   };
+  if (requires !== undefined) {
+    if (
+      !Array.isArray(requires) ||
+      requires.some(name => typeof name !== 'string')
+    ) {
+      throw new Error('requires must be an array of plugin names');
+    }
+    manifest.requires = [...requires].sort();
+  }
   if (channel) manifest.channel = channel;
   if (notBefore !== undefined)
     manifest.notBefore = ordinal('notBefore', notBefore);

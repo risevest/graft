@@ -61,11 +61,12 @@
     "prettier-plugin-java": "2.9.7",
     "rimraf": "6.1.2",
     "rollup": "4.62.3",
-    "typescript": "5.9.3"
+    "typescript": "5.9.3",
+    "unplugin": "^3.3.0"
   },
   "peerDependencies": {
     "@capacitor/core": ">=8.0.0",
-    "unplugin": "^3.0.0"
+    "unplugin": "^3.3.0"
   },
   "peerDependenciesMeta": {
     "unplugin": {
