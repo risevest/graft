@@ -11,9 +11,10 @@ See `NOTICE` and `UPSTREAM.md`.
 
 Pre-release. The lifecycle, the native pointer, the self-hosted protocol and binary deltas are
 implemented on both platforms; a release is fetched as a patch when one is published and falls back
-to whole files otherwise. The apply paths compile and their zstd semantics are verified against a
-real bundle, but neither has yet run end to end on a device. `requires`/`provides` contract gating
-is not implemented — `minNativeBuild` is the only compatibility gate today.
+to whole files otherwise, and that path has run end to end on a device.
+
+Contract gating is half-built: the bundle side derives a `requires` set and puts it in the signed
+manifest, but no device checks it yet, so `minNativeBuild` remains the only gate that runs.
 
 ## Install
 
