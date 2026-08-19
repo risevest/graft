@@ -42,7 +42,7 @@ export function buildManifest({
   dir,
   id,
   counter,
-  minNativeBuild,
+  nativeFingerprint,
   channel,
   notBefore,
   expiresAt,
@@ -52,7 +52,7 @@ export function buildManifest({
     ['dir', dir],
     ['id', id],
     ['counter', counter],
-    ['minNativeBuild', minNativeBuild],
+    ['nativeFingerprint', nativeFingerprint],
   ]) {
     if (value === undefined || value === null || value === '')
       throw new Error(`${name} is required`);
@@ -82,7 +82,7 @@ export function buildManifest({
     schema: 1,
     id: String(id),
     counter: ordinal('counter', counter),
-    minNativeBuild: ordinal('minNativeBuild', minNativeBuild),
+    nativeFingerprint: String(nativeFingerprint),
     files,
   };
   if (requires !== undefined) {

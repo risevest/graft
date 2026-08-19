@@ -66,11 +66,11 @@ What is ours, and shares no code with upstream:
 | | Upstream | Graft |
 |---|---|---|
 | Update source | Capawesome Cloud (`appId`, `serverDomain`, `customId`, device headers) | The channel document in `README.md` (`serverUrl`) |
-| Which release | Whatever the server hands back for this device | Chosen on-device from `minNativeBuild`, `counter` and a local rollout bucket |
+| Which release | Whatever the server hands back for this device | Chosen on-device from `nativeFingerprint`, `counter` and a local rollout bucket |
 | Signing | Optional, per file, signature supplied by response headers | Required, once over the manifest, verified before any asset is fetched |
 | File integrity | `X-Checksum`/`X-Signature` headers; manifest checksums used only for diffing | Every installed file checked against the signed manifest |
 | Downgrades | Not prevented | Monotonic `counter` floor, recorded at install |
-| Binary change | Pointer always discarded | Kept when `minNativeBuild` allows and the embedded counter is not higher |
+| Binary change | Pointer always discarded | Kept when `nativeFingerprint` matches and the embedded counter is not higher |
 
 Removed from the API: `fetchChannels`, `fetchLatestBundle`, `getConfig`, `setConfig`, `resetConfig`,
 `getCustomId`, `setCustomId`, `getBundles`, `getDeviceId` (replaced by `getInstallId`), and the

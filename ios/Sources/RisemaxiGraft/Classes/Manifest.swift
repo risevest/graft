@@ -13,7 +13,7 @@ public struct Manifest: Decodable {
     /// comparable when the consuming app counts releases and native builds on one scale, and a
     /// consumer that cannot do that omits it rather than supplying a number that does not compare.
     let counter: Int?
-    let minNativeBuild: Int
+    let nativeFingerprint: String
     let notBefore: Int?
     let expiresAt: Int?
     let files: [ManifestFile]
@@ -21,7 +21,7 @@ public struct Manifest: Decodable {
     let requires: [String]
 
     private enum CodingKeys: String, CodingKey {
-        case schema, id, channel, counter, minNativeBuild, notBefore, expiresAt, files, requires
+        case schema, id, channel, counter, nativeFingerprint, notBefore, expiresAt, files, requires
     }
 
     public init(from decoder: Decoder) throws {
@@ -33,7 +33,7 @@ public struct Manifest: Decodable {
         id = try container.decode(String.self, forKey: .id)
         channel = try container.decodeIfPresent(String.self, forKey: .channel)
         counter = try container.decodeIfPresent(Int.self, forKey: .counter)
-        minNativeBuild = try container.decode(Int.self, forKey: .minNativeBuild)
+        nativeFingerprint = try container.decode(String.self, forKey: .nativeFingerprint)
         notBefore = try container.decodeIfPresent(Int.self, forKey: .notBefore)
         expiresAt = try container.decodeIfPresent(Int.self, forKey: .expiresAt)
         files = try container.decode([ManifestFile].self, forKey: .files)

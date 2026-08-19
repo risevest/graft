@@ -18,14 +18,14 @@ public enum ReleaseSelector {
     /// newest release it can run.
     public static func select(
         from releases: [ChannelRelease],
-        versionCode: Int,
+        nativeFingerprint: String,
         highestInstalledCounter: Int,
         bucket: Int,
         blockedBundleIds: Set<String>
     ) -> ChannelRelease? {
         return releases
             .filter {
-                $0.minNativeBuild <= versionCode
+                $0.nativeFingerprint == nativeFingerprint
                     && $0.counter > highestInstalledCounter
                     && $0.rollout > bucket
                     && !blockedBundleIds.contains($0.id)

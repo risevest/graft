@@ -16,7 +16,7 @@ public class GraftPreferences {
     static final String LAST_FAILED_BUNDLE_ID_KEY = "lastFailedBundleId";
     static final String LAST_FAILED_COUNT_KEY = "lastFailedCount";
     static final String LAST_KNOWN_GOOD_BUNDLE_ID_KEY = "lastKnownGoodBundleId";
-    static final String LAST_NATIVE_BUILD_KEY = "lastNativeBuild";
+    static final String LAST_NATIVE_FINGERPRINT_KEY = "lastNativeFingerprint";
     static final String PREVIOUS_BUNDLE_ID_KEY = "previousBundleId";
 
     @NonNull

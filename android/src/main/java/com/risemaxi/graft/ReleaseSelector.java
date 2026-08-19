@@ -35,14 +35,14 @@ public final class ReleaseSelector {
     @Nullable
     public static ChannelRelease select(
         @NonNull List<ChannelRelease> releases,
-        long versionCode,
+        @NonNull String nativeFingerprint,
         long highestInstalledCounter,
         int bucket,
         @NonNull Set<String> blockedBundleIds
     ) {
         ChannelRelease selected = null;
         for (ChannelRelease release : releases) {
-            if (release.getMinNativeBuild() > versionCode) {
+            if (!release.getNativeFingerprint().equals(nativeFingerprint)) {
                 continue;
             }
             if (release.getCounter() <= highestInstalledCounter) {

@@ -9,7 +9,7 @@ type Ordinal = number | string;
 export interface GraftManifestOptions {
   id: Ordinal;
   counter: Ordinal;
-  minNativeBuild: Ordinal;
+  nativeFingerprint: string;
   dir?: string;
   out?: string;
   channel?: string;
