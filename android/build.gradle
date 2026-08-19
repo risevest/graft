@@ -6,6 +6,7 @@ ext {
     androidxEspressoCoreVersion = project.hasProperty('androidxEspressoCoreVersion') ? rootProject.ext.androidxEspressoCoreVersion : '3.7.0'
     okhttp3Version = project.hasProperty('okhttp3Version') ? rootProject.ext.okhttp3Version : '5.3.2'
     zip4jVersion = project.hasProperty('zip4jVersion') ? rootProject.ext.zip4jVersion : '2.11.5'
+    zstdVersion = project.hasProperty('zstdVersion') ? rootProject.ext.zstdVersion : '1.5.7-5'
 }
 
 buildscript {
@@ -57,6 +58,7 @@ dependencies {
     implementation "androidx.appcompat:appcompat:$androidxAppCompatVersion"
     implementation "androidx.webkit:webkit:$androidxWebkitVersion"
     implementation "net.lingala.zip4j:zip4j:$zip4jVersion"
+    implementation "com.github.luben:zstd-jni:$zstdVersion@aar"
     implementation "com.squareup.okhttp3:okhttp:$okhttp3Version"
     implementation "com.squareup.okhttp3:okhttp-brotli:$okhttp3Version"
     testImplementation "junit:junit:$junitVersion"

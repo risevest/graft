@@ -38,6 +38,7 @@ import com.risemaxi.graft.interfaces.DownloadProgressCallback;
 import com.risemaxi.graft.interfaces.EmptyCallback;
 import com.risemaxi.graft.interfaces.NonEmptyCallback;
 import com.risemaxi.graft.interfaces.Result;
+import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
@@ -398,6 +399,7 @@ public class Graft {
                         verifySignature(manifestBytes, release.getSignature(), publicKey);
                         Manifest manifest = new Manifest(new JSONObject(new String(manifestBytes, StandardCharsets.UTF_8)));
                         verifyManifestIsAcceptable(manifest, release, channel);
+                        verifyNoFileCollidesWithManifest(manifestUrl, manifest);
                         installManifest(manifestUrl, manifest, manifestBytes, completion);
                     } catch (Exception exception) {
                         completion.error(exception);
@@ -423,6 +425,73 @@ public class Graft {
             throw new Exception(GraftPlugin.ERROR_INSTALL_FAILED);
         }
 
+        String baseReleaseId = resolveBaseReleaseId();
+        HttpUrl patchUrl = baseReleaseId == null ? null : buildPatchUrl(baseReleaseId, manifest.getId());
+        if (patchUrl == null) {
+            installByDownload(manifestUrl, manifest, manifestBytes, directory, completion);
+            return;
+        }
+
+        File archive = new File(plugin.getContext().getCacheDir(), UUID.randomUUID().toString());
+        downloadFile(
+            patchUrl.toString(),
+            archive,
+            (downloadedBytes, totalBytes) -> notifyDownloadBundleProgressListeners(manifest.getId(), downloadedBytes, totalBytes),
+            new EmptyCallback() {
+                @Override
+                public void success() {
+                    try {
+                        GraftPatch.apply(archive, buildBaseReader(), manifest, directory);
+                        finishInstall(manifest, manifestBytes, directory, completion);
+                    } catch (Exception exception) {
+                        Logger.warn(GraftPlugin.TAG, "Patch could not be applied, downloading the full bundle: " + exception.getMessage());
+                        fallBackToDownload(manifestUrl, manifest, manifestBytes, directory, completion);
+                    } finally {
+                        archive.delete();
+                    }
+                }
+
+                @Override
+                public void error(@NonNull Exception exception) {
+                    archive.delete();
+                    Logger.warn(GraftPlugin.TAG, "No usable patch, downloading the full bundle: " + exception.getMessage());
+                    fallBackToDownload(manifestUrl, manifest, manifestBytes, directory, completion);
+                }
+            }
+        );
+    }
+
+    /**
+     * A patch is an optimisation, never a requirement: any failure — no patch published, a transfer
+     * error, a patch that will not apply, a digest that does not match the signed manifest — discards
+     * whatever it produced and installs the release the ordinary way.
+     */
+    private void fallBackToDownload(
+        @NonNull HttpUrl manifestUrl,
+        @NonNull Manifest manifest,
+        @NonNull byte[] manifestBytes,
+        @NonNull File directory,
+        @NonNull NonEmptyCallback<Result> completion
+    ) {
+        try {
+            deleteFileRecursively(directory);
+            if (!directory.mkdirs()) {
+                throw new Exception(GraftPlugin.ERROR_INSTALL_FAILED);
+            }
+            installByDownload(manifestUrl, manifest, manifestBytes, directory, completion);
+        } catch (Exception exception) {
+            deleteFileRecursively(directory);
+            completion.error(exception);
+        }
+    }
+
+    private void installByDownload(
+        @NonNull HttpUrl manifestUrl,
+        @NonNull Manifest manifest,
+        @NonNull byte[] manifestBytes,
+        @NonNull File directory,
+        @NonNull NonEmptyCallback<Result> completion
+    ) throws Exception {
         Map<String, String> currentHrefBySha256 = loadCurrentHrefBySha256();
         List<ManifestFile> filesToDownload = new ArrayList<>();
         for (ManifestFile file : manifest.getFiles()) {
@@ -441,14 +510,7 @@ public class Graft {
                 @Override
                 public void success() {
                     try {
-                        if (!new File(directory, GraftPointer.INDEX_FILE_NAME).exists()) {
-                            throw new Exception(GraftPlugin.ERROR_BUNDLE_INDEX_HTML_MISSING);
-                        }
-                        // Written last so the verified file set is exactly what the manifest describes
-                        writeFile(new File(directory, GraftPointer.MANIFEST_FILE_NAME), manifestBytes);
-                        moveBundleIntoPlace(directory, manifest.getId());
-                        stageRelease(manifest.getId(), manifest.getCounter());
-                        completion.success(new SyncResult(manifest.getId()));
+                        finishInstall(manifest, manifestBytes, directory, completion);
                     } catch (Exception exception) {
                         deleteFileRecursively(directory);
                         completion.error(exception);
@@ -464,6 +526,92 @@ public class Graft {
         );
     }
 
+    private void finishInstall(
+        @NonNull Manifest manifest,
+        @NonNull byte[] manifestBytes,
+        @NonNull File directory,
+        @NonNull NonEmptyCallback<Result> completion
+    ) throws Exception {
+        try {
+            if (!new File(directory, GraftPointer.INDEX_FILE_NAME).exists()) {
+                throw new Exception(GraftPlugin.ERROR_BUNDLE_INDEX_HTML_MISSING);
+            }
+            // Written last so the verified file set is exactly what the manifest describes
+            writeFile(new File(directory, GraftPointer.MANIFEST_FILE_NAME), manifestBytes);
+            moveBundleIntoPlace(directory, manifest.getId());
+            stageRelease(manifest.getId(), manifest.getCounter());
+            completion.success(new SyncResult(manifest.getId()));
+        } catch (Exception exception) {
+            deleteFileRecursively(directory);
+            throw exception;
+        }
+    }
+
+    /**
+     * Which release the device can patch against — the staged bundle if there is one, otherwise the
+     * bundle compiled into the binary.
+     */
+    @Nullable
+    private String resolveBaseReleaseId() {
+        String currentBundleId = getCurrentBundleId();
+        if (currentBundleId != null) {
+            return currentBundleId;
+        }
+        Manifest embedded = GraftPointer.readEmbeddedManifest(plugin.getContext());
+        return embedded == null ? null : embedded.getId();
+    }
+
+    /**
+     * A patch is addressed by path rather than by query, so every request this plugin makes can be
+     * served by a static bucket with no compute in front of it. A server that wants to synthesise a
+     * missing pair on demand can still intercept the path; one that does not simply answers 404 and
+     * the device downloads the files it cannot reuse.
+     */
+    @Nullable
+    private HttpUrl buildPatchUrl(@NonNull String from, @NonNull String to) {
+        try {
+            return parseServerUrl()
+                .newBuilder()
+                .addPathSegment("v1")
+                .addPathSegment("patches")
+                .addPathSegment(from + "__" + to + ".gpz")
+                .build();
+        } catch (Exception exception) {
+            return null;
+        }
+    }
+
+    @NonNull
+    private GraftPatch.BaseReader buildBaseReader() {
+        String currentBundleId = getCurrentBundleId();
+        return href -> {
+            if (currentBundleId == null) {
+                try (
+                    InputStream source = plugin
+                        .getContext()
+                        .getAssets()
+                        .open(defaultWebAssetDir + "/" + href)
+                ) {
+                    return readAllBytes(source);
+                }
+            }
+            try (FileInputStream source = new FileInputStream(new File(buildBundleDirectoryFor(currentBundleId), href))) {
+                return readAllBytes(source);
+            }
+        };
+    }
+
+    @NonNull
+    private static byte[] readAllBytes(@NonNull InputStream source) throws IOException {
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        byte[] chunk = new byte[8192];
+        int read;
+        while ((read = source.read(chunk)) != -1) {
+            out.write(chunk, 0, read);
+        }
+        return out.toByteArray();
+    }
+
     /**
      * Records the release as installed before it is staged, so a bundle that never boots still raises
      * the downgrade floor and the device can only ever move forward.
@@ -474,6 +622,20 @@ public class Graft {
         }
         if (!bundleId.equals(getCurrentBundleId())) {
             setNextBundleById(bundleId);
+        }
+    }
+
+    /**
+     * Release files are fetched as siblings of the manifest, so a file named like the manifest and the
+     * manifest itself resolve to one URL and whichever is published last wins. Left undetected that
+     * surfaces as a signature failure on a manifest the publisher signed correctly.
+     */
+    private void verifyNoFileCollidesWithManifest(@NonNull HttpUrl manifestUrl, @NonNull Manifest manifest) throws Exception {
+        String manifestFileName = manifestUrl.pathSegments().get(manifestUrl.pathSize() - 1);
+        for (ManifestFile file : manifest.getFiles()) {
+            if (file.getHref().equals(manifestFileName)) {
+                throw new Exception(GraftPlugin.ERROR_MANIFEST_NAME_COLLISION);
+            }
         }
     }
 

@@ -13,9 +13,12 @@ public enum CustomError: Error {
     case installFailed
     case manifestExpired
     case manifestMismatch
+    case manifestNameCollision
     case manifestUrlInvalid
     case nativeBuildInvalid
     case notInitialized
+    case patchChecksumMismatch
+    case patchFailed
     case publicKeyInvalid
     case publicKeyMissing
     case serverUrlInvalid
@@ -52,12 +55,20 @@ extension CustomError: LocalizedError {
             return NSLocalizedString("The manifest is not valid at the current time.", comment: "manifestExpired")
         case .manifestMismatch:
             return NSLocalizedString("The manifest does not describe an acceptable release.", comment: "manifestMismatch")
+        case .manifestNameCollision:
+            return NSLocalizedString(
+                "A file in the release has the same name as the manifest, so one overwrites the other. Serve the manifest as graft-manifest.json.",
+                comment: "manifestNameCollision")
         case .manifestUrlInvalid:
             return NSLocalizedString("The manifest URL is not on the configured server.", comment: "manifestUrlInvalid")
         case .nativeBuildInvalid:
             return NSLocalizedString("CFBundleVersion must be an integer to compare against minNativeBuild.", comment: "nativeBuildInvalid")
         case .notInitialized:
             return NSLocalizedString("Graft failed to initialize.", comment: "notInitialized")
+        case .patchChecksumMismatch:
+            return NSLocalizedString("A patched file did not match the manifest.", comment: "patchChecksumMismatch")
+        case .patchFailed:
+            return NSLocalizedString("The patch could not be applied.", comment: "patchFailed")
         case .publicKeyInvalid:
             return NSLocalizedString("Invalid public key.", comment: "publicKeyInvalid")
         case .publicKeyMissing:

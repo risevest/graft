@@ -9,10 +9,11 @@ See `NOTICE` and `UPSTREAM.md`.
 
 ## Status
 
-Pre-release. The lifecycle, the native pointer and the self-hosted protocol below are implemented on
-both platforms. Binary deltas are not: a release still transfers whole files, reusing every file the
-running bundle already has at the same digest. `requires`/`provides` contract gating is not
-implemented either — `minNativeBuild` is the only compatibility gate today.
+Pre-release. The lifecycle, the native pointer, the self-hosted protocol and binary deltas are
+implemented on both platforms; a release is fetched as a patch when one is published and falls back
+to whole files otherwise. The apply paths compile and their zstd semantics are verified against a
+real bundle, but neither has yet run end to end on a device. `requires`/`provides` contract gating
+is not implemented — `minNativeBuild` is the only compatibility gate today.
 
 ## Install
 
@@ -28,8 +29,15 @@ Then serve the staged bundle from the pre-WebView hook on each platform:
 - **iOS** — use `GraftViewController` as the root view controller, or override
   `instanceDescriptor()` and assign `GraftPointer.resolveActiveBundleDirectory()` to `appLocation`.
 
-The app must call `Graft.ready()` once it has booted. With the default `readyTimeout` of 10 s, a
-bundle that never reports is rolled back to the last one that did.
+The app must call `Graft.ready()`. With the default `readyTimeout` of 10 s, a bundle that never
+reports is rolled back to the last one that did.
+
+**Call it at the end of module initialisation, not from a framework "app ready" hook.** The watchdog
+asks one question — did this bundle's entry chunk parse and evaluate — and reaching the end of the
+entry module is precisely that answer. A later signal cannot answer it: a bundle broken at module
+init never reaches the hook either way, and a bundle whose lazily-loaded chunks are broken is already
+past the hook and fails on interaction, where a rollback would not have helped. Signalling late only
+widens the window in which a healthy bundle is reverted for being slow.
 
 ## Configuration
 
@@ -66,7 +74,7 @@ manifest before a bundle is installed.
       "counter": 1042,
       "rollout": 25,
       "minNativeBuild": 17862387,
-      "manifest": "/v1/releases/r-1042/manifest.json",
+      "manifest": "/v1/releases/r-1042/graft-manifest.json",
       "sig": "<base64 RSA PKCS#1 v1.5 over SHA-256 of the manifest bytes>",
     },
   ],
@@ -79,6 +87,12 @@ the device stays put. `killSwitch` clears the pointer, so the next launch serves
 
 `manifest` is resolved against the channel document's URL and must land on `serverUrl`'s origin.
 Release files are fetched as siblings of the manifest — `<manifest dir>/<href>`.
+
+**Serve the manifest as `graft-manifest.json`.** Because files are siblings of it, a release
+containing a file of the same name resolves to the same URL and one overwrites the other — and
+`manifest.json` is a file almost every web app ships. `graft-manifest.json` is safe because the
+generator excludes that name from the file set by construction. A manifest whose file list would
+collide is rejected, so this cannot ship silently, but the error is easier to avoid than to read.
 
 ### Rollout bucket
 
@@ -120,6 +134,98 @@ an installed bundle is exactly the signed file set. The manifest is written as
 `graft-manifest.json`; ship one at `public/graft-manifest.json` in the native build so the first OTA
 can reuse the embedded files instead of downloading them.
 
+### Patch archive
+
+A release may also be transferred as a patch against a bundle the device already has. One archive
+per version pair: an 8-byte `GRAFTP1\n` magic, a length-prefixed plan, then the payloads as a
+counted sequence of length-prefixed blocks, the whole thing compressed with zstd-19. Lengths are
+unsigned 32-bit big-endian.
+
+Payloads are referenced by index rather than by name, so the archive contains no paths at all — the
+only paths anywhere are the manifest hrefs, which are already validated. That also keeps the reader
+to a few dozen lines on each platform, where a tar reader would be a few hundred with pax and GNU
+long-name handling to get wrong.
+
+```jsonc
+{
+  "schema": 1,
+  "from": "r-1041",
+  "to": "r-1042",
+  "ops": [
+    { "op": "keep", "href": "assets/app-Ba9.js", "from": "assets/app-Ba9.js" },
+    {
+      "op": "patch",
+      "href": "assets/index-D6T.js",
+      "from": "assets/index-4ws.js",
+      "payload": 0,
+    },
+    { "op": "add", "href": "assets/new-Qz1.js", "payload": 1 },
+    { "op": "delete", "href": "assets/gone-Xy2.js" },
+  ],
+}
+```
+
+Each payload is the output of `zstd -19 --long=27 --patch-from <base>`, computed over
+**uncompressed** bytes — diffing two already-compressed files is near-useless, because deflate
+divergence cascades.
+
+The device fetches `GET <serverUrl>/v1/patches/<from>__<to>.gpz`. Addressing a patch by path rather
+than by query is deliberate: it is what lets every request graft makes be answered by a static
+bucket with no compute in front of it. A server that wants to synthesise a missing pair on demand
+can still intercept that path; one that does not answers 404 and the device downloads the files it
+cannot reuse.
+
+**The plan is not trusted.** It says how to reconstruct a file, never whether the result is
+acceptable. Reconstruction is driven by the signed manifest's file list, and every output file is
+verified against its `sha256` from that manifest before the bundle is eligible to run. A manifest
+entry with no corresponding op is an error, and any failure — a missing base, a patch that will not
+apply, a digest mismatch — falls back to a full download rather than installing something unverified.
+
+Bases are paired per file, not by name: content-hashed chunk names change every release, so the
+generator picks the base that yields the smallest patch among same-extension candidates and stores
+that choice in the op. If no base beats simply shipping the file, it becomes an `add`.
+
+Measured on a real 98-file bundle, a one-word copy change produces a **4,253-byte archive** against
+**1,622 kB** for the same release transferred file-by-file.
+
+## Release tooling
+
+Everything the device validates, graft also produces. The rules are subtle enough — canonical key
+order, never re-serialising between signing and upload, pairing patch bases by content rather than
+by name — that a consumer reimplementing them will get one of them wrong, and the failure surfaces
+as a signature error on a manifest that was signed correctly.
+
+```sh
+graft manifest --dir dist --id r-1042 --counter 1042 --min-native-build 17862387 \
+               --channel production --not-before 1786238700 --expires-at 1793928700
+GRAFT_SIGNING_KEY="$(cat private.pem)" graft sign dist/graft-manifest.json manifest.sig
+graft patch --old <previous bundle> --new dist --out r-1041__r-1042.gpz
+graft apply --base <previous bundle> --patch r-1041__r-1042.gpz \
+            --manifest dist/graft-manifest.json --out <dir>
+```
+
+`graft apply` is a reference implementation and a conformance check for the native apply paths — it
+is not what runs on device. What the release pipeline owns is the part graft cannot know: where the
+files are hosted, which counter a release gets, and when a channel points at it.
+
+### As a bundler plugin
+
+The manifest can also be written as part of the build, which removes the second command and with it
+the chance of signing a stale directory:
+
+```ts
+import { vite as graftManifest } from '@risemaxi/graft/tools/unplugin.mjs';
+
+graftManifest({ dir: 'dist', id, counter, minNativeBuild });
+```
+
+`unplugin` is an optional peer, and the same factory exports `rollup`, `rolldown`, `webpack`,
+`rspack`, `esbuild` and `farm` builds. It hooks `writeBundle` and nothing else — the one hook every
+bundler unifies, and one that deliberately carries no arguments. That suits this exactly: the
+bundler is being asked for the timing, not for an inventory. A bundler's record of what it emitted
+is not the shipped file set, because static assets are copied in without passing through it, and
+every file has to be read off disk to be digested anyway.
+
 ### Requirements on the consuming app
 
 **The build number must be an integer, and must mean the same thing on both platforms.**
@@ -147,9 +253,9 @@ discard every staged bundle, which is the silent downgrade this rule exists to p
 Bundlers name chunks after a hash of their contents, and an update only reuses a file when its name
 already exists on the device. So a value that changes every release — a crash reporter's release
 identifier is the usual one — renames the chunk holding it, renames every chunk that references that
-one, and cascades. Measured on a real app: changing only the release identifier left **21 of 98
-files different, 5.8 MB of 9.5 MB**, though the identifier appeared in just two of them. The reuse
-this plugin relies on quietly stops working, and nothing tells you.
+one, and cascades. Measured on a real app, a one-word source change touching the entry chunk left
+**19 of 98 files different, 5.74 MB of 9.62 MB** (~1.3 MB gzipped). An identifier compiled into that
+chunk makes you pay the same cost on every release, including ones that changed no code at all.
 
 Graft already knows which release it is serving, so read it from here instead of compiling one in:
 
@@ -157,7 +263,7 @@ Graft already knows which release it is serving, so read it from here instead of
 import { releaseIdentity } from '@risemaxi/graft';
 
 const identity = releaseIdentity(); // { releaseId, nativeBuild } | null
-Sentry.init({ release: identity?.releaseId ?? 'unknown', /* … */ });
+Sentry.init({ release: identity?.releaseId ?? 'unknown' /* … */ });
 ```
 
 It is published to the page before any app code runs and resolves synchronously, so it can be passed
@@ -189,6 +295,23 @@ bun run verify:web
 bun run verify:android    # needs JDK 21 and ANDROID_HOME
 bun run verify:ios        # needs Xcode
 ```
+
+Those three only compile. To exercise the apply path on both platforms against a real bundle and a
+set of deliberately malformed archives:
+
+```sh
+FIXTURES=<dir> verify/run.sh
+```
+
+The sources it builds are symlinks to the shipping ones, so this runs the code that runs on a device
+rather than a copy of it. `verify/run.sh` explains what the fixture directory needs and how to
+generate it; use a realistic bundle, because a one-file marker exercises none of the base pairing or
+hash cascade that makes any of this worth testing.
+
+Every malformed archive must be rejected, and none may leave behind a file whose digest is not the
+signed manifest's. The case that matters most is `wrong-content` — an op pointed at valid bytes from
+the wrong file. A corrupted zstd frame fails to decompress before any digest is computed, so it
+never reaches the check the whole design rests on; only that case does.
 
 ## Licence
 

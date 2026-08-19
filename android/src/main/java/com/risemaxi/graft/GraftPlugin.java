@@ -44,8 +44,12 @@ public class GraftPlugin extends Plugin {
     public static final String ERROR_INSTALL_FAILED = "Bundle could not be installed.";
     public static final String ERROR_MANIFEST_EXPIRED = "The manifest is not valid at the current time.";
     public static final String ERROR_MANIFEST_MISMATCH = "The manifest does not describe an acceptable release.";
+    public static final String ERROR_MANIFEST_NAME_COLLISION =
+        "A file in the release has the same name as the manifest, so one overwrites the other. Serve the manifest as graft-manifest.json.";
     public static final String ERROR_MANIFEST_URL_INVALID = "The manifest URL is not on the configured server.";
     public static final String ERROR_NOT_INITIALIZED = "Graft failed to initialize.";
+    public static final String ERROR_PATCH_CHECKSUM_MISMATCH = "A patched file did not match the manifest.";
+    public static final String ERROR_PATCH_FAILED = "The patch could not be applied.";
     public static final String ERROR_PUBLIC_KEY_INVALID = "Invalid public key.";
     public static final String ERROR_PUBLIC_KEY_MISSING = "publicKey must be configured.";
     public static final String ERROR_SERVER_URL_INVALID = "Invalid serverUrl.";

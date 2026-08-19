@@ -1,0 +1,1 @@
+../../../../ios/Sources/RisemaxiGraft/Classes/Manifest.swift

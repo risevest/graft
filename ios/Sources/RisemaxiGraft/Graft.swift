@@ -244,6 +244,7 @@ import Capacitor
         try verifySignature(content: manifestData, signature: release.sig, publicKey: publicKey)
         let manifest = try JSONDecoder().decode(Manifest.self, from: manifestData)
         try verifyManifestIsAcceptable(manifest, release: release, channel: channel)
+        try verifyNoFileCollidesWithManifest(manifest, manifestUrl: manifestUrl)
 
         try await install(manifest: manifest, manifestData: manifestData, manifestUrl: manifestUrl)
         stageRelease(bundleId: manifest.id, counter: release.counter)
@@ -254,16 +255,12 @@ import Capacitor
         let directory = cachesDirectoryUrl.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         do {
-            let currentHrefBySha256 = loadCurrentHrefBySha256()
-            var filesToDownload = [ManifestFile]()
-            for file in manifest.files {
-                guard let currentHref = currentHrefBySha256[file.sha256],
-                      copyCurrentBundleFile(currentHref: currentHref, file: file, to: directory) else {
-                    filesToDownload.append(file)
-                    continue
-                }
+            let patched = await installFromPatch(manifest: manifest, to: directory)
+            if !patched {
+                try? FileManager.default.removeItem(at: directory)
+                try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+                try await installByDownload(manifest: manifest, manifestUrl: manifestUrl, to: directory)
             }
-            try await downloadBundleFiles(manifestUrl: manifestUrl, files: filesToDownload, to: directory, bundleId: manifest.id)
 
             guard FileManager.default.fileExists(atPath: directory.appendingPathComponent(GraftPointer.indexFileName).path) else {
                 throw CustomError.bundleIndexHtmlMissing
@@ -277,6 +274,66 @@ import Capacitor
         }
     }
 
+    /// A patch is an optimisation, never a requirement: any failure — no patch published, a transfer
+    /// error, a patch that will not apply, a digest that does not match the signed manifest — discards
+    /// whatever it produced and installs the release the ordinary way.
+    private func installFromPatch(manifest: Manifest, to directory: URL) async -> Bool {
+        guard let baseReleaseId = resolveBaseReleaseId(),
+              let patchUrl = buildPatchUrl(from: baseReleaseId, to: manifest.id) else {
+            return false
+        }
+        let archive = cachesDirectoryUrl.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: archive) }
+        do {
+            try await httpClient.download(url: patchUrl, to: archive, callback: nil)
+            try GraftPatch.apply(archive: archive, base: currentBundleDirectory(), manifest: manifest, to: directory)
+            return true
+        } catch {
+            CAPLog.print("[", GraftPlugin.tag, "] ", "No usable patch, downloading the full bundle: \(error.localizedDescription)")
+            return false
+        }
+    }
+
+    private func installByDownload(manifest: Manifest, manifestUrl: URL, to directory: URL) async throws {
+        let currentHrefBySha256 = loadCurrentHrefBySha256()
+        var filesToDownload = [ManifestFile]()
+        for file in manifest.files {
+            guard let currentHref = currentHrefBySha256[file.sha256],
+                  copyCurrentBundleFile(currentHref: currentHref, file: file, to: directory) else {
+                filesToDownload.append(file)
+                continue
+            }
+        }
+        try await downloadBundleFiles(manifestUrl: manifestUrl, files: filesToDownload, to: directory, bundleId: manifest.id)
+    }
+
+    /// Which release the device can patch against — the staged bundle if there is one, otherwise the
+    /// bundle compiled into the binary.
+    private func resolveBaseReleaseId() -> String? {
+        getCurrentBundleId() ?? GraftPointer.readEmbeddedManifest()?.id
+    }
+
+    private func currentBundleDirectory() -> URL {
+        if let currentBundleId = getCurrentBundleId() {
+            return GraftPointer.buildBundleDirectory(bundleId: currentBundleId)
+        }
+        return GraftPointer.buildEmbeddedBundleDirectory()
+    }
+
+    /// A patch is addressed by path rather than by query, so every request this plugin makes can be
+    /// served by a static bucket with no compute in front of it. A server that wants to synthesise a
+    /// missing pair on demand can still intercept the path; one that does not simply answers 404 and
+    /// the device downloads the files it cannot reuse.
+    private func buildPatchUrl(from: String, to: String) -> URL? {
+        guard let serverUrl = try? parseServerUrl() else {
+            return nil
+        }
+        return serverUrl
+            .appendingPathComponent("v1")
+            .appendingPathComponent("patches")
+            .appendingPathComponent("\(from)__\(to).gpz")
+    }
+
     /// Records the release as installed before it is staged, so a bundle that never boots still raises
     /// the downgrade floor and the device can only ever move forward.
     private func stageRelease(bundleId: String, counter: Int) {
@@ -285,6 +342,16 @@ import Capacitor
         }
         if bundleId != getCurrentBundleId() {
             setNextBundleById(bundleId)
+        }
+    }
+
+    /// Release files are fetched as siblings of the manifest, so a file named like the manifest and the
+    /// manifest itself resolve to one URL and whichever is published last wins. Left undetected that
+    /// surfaces as a signature failure on a manifest the publisher signed correctly.
+    private func verifyNoFileCollidesWithManifest(_ manifest: Manifest, manifestUrl: URL) throws {
+        let manifestFileName = manifestUrl.lastPathComponent
+        if manifest.files.contains(where: { $0.href == manifestFileName }) {
+            throw CustomError.manifestNameCollision
         }
     }
 
