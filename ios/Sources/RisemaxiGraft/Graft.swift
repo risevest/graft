@@ -369,6 +369,18 @@ import Capacitor
               now >= notBefore, now < expiresAt else {
             throw CustomError.manifestExpired
         }
+        try verifyContractIsSatisfied(manifest)
+    }
+
+    /// A bundle reaches native only through a registerPlugin proxy, so a plugin the binary does not
+    /// have is a bundle this build cannot run. Checked against the bridge rather than a recorded list,
+    /// because the binary is the only thing that knows what it actually shipped.
+    private func verifyContractIsSatisfied(_ manifest: Manifest) throws {
+        guard let bridge = plugin.bridge else { return }
+        for name in manifest.requires where bridge.plugin(withName: name) == nil {
+            CAPLog.print("[", GraftPlugin.tag, "] ", "This build has no plugin named \(name)")
+            throw CustomError.manifestContractUnmet
+        }
     }
 
     private func buildChannelUrl(channel: String) throws -> URL {

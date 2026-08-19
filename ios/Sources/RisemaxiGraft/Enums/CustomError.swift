@@ -11,6 +11,7 @@ public enum CustomError: Error {
     case downloadFailed
     case httpTimeout
     case installFailed
+    case manifestContractUnmet
     case manifestExpired
     case manifestMismatch
     case manifestNameCollision
@@ -51,6 +52,8 @@ extension CustomError: LocalizedError {
             return NSLocalizedString("Request timed out.", comment: "httpTimeout")
         case .installFailed:
             return NSLocalizedString("Bundle could not be installed.", comment: "installFailed")
+        case .manifestContractUnmet:
+            return NSLocalizedString("The release needs a plugin this build does not have.", comment: "manifestContractUnmet")
         case .manifestExpired:
             return NSLocalizedString("The manifest is not valid at the current time.", comment: "manifestExpired")
         case .manifestMismatch:

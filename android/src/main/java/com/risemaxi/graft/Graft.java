@@ -666,6 +666,25 @@ public class Graft {
         if (now < notBefore || now >= expiresAt) {
             throw new Exception(GraftPlugin.ERROR_MANIFEST_EXPIRED);
         }
+        verifyContractIsSatisfied(manifest);
+    }
+
+    /**
+     * A bundle reaches native only through a registerPlugin proxy, so a plugin the binary does not
+     * have is a bundle this build cannot run. Checked against the bridge rather than a recorded list,
+     * because the binary is the only thing that knows what it actually shipped.
+     */
+    private void verifyContractIsSatisfied(@NonNull Manifest manifest) throws Exception {
+        Bridge bridge = plugin.getBridge();
+        if (bridge == null) {
+            return;
+        }
+        for (String name : manifest.getRequires()) {
+            if (bridge.getPlugin(name) == null) {
+                Logger.error(GraftPlugin.TAG, "This build has no plugin named " + name, null);
+                throw new Exception(GraftPlugin.ERROR_MANIFEST_CONTRACT_UNMET);
+            }
+        }
     }
 
     @NonNull

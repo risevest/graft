@@ -17,9 +17,11 @@ public struct Manifest: Decodable {
     let notBefore: Int?
     let expiresAt: Int?
     let files: [ManifestFile]
+    /// Plugin jsNames the bundle can reach. Absent on a manifest built before contracts existed.
+    let requires: [String]
 
     private enum CodingKeys: String, CodingKey {
-        case schema, id, channel, counter, minNativeBuild, notBefore, expiresAt, files
+        case schema, id, channel, counter, minNativeBuild, notBefore, expiresAt, files, requires
     }
 
     public init(from decoder: Decoder) throws {
@@ -35,6 +37,7 @@ public struct Manifest: Decodable {
         notBefore = try container.decodeIfPresent(Int.self, forKey: .notBefore)
         expiresAt = try container.decodeIfPresent(Int.self, forKey: .expiresAt)
         files = try container.decode([ManifestFile].self, forKey: .files)
+        requires = try container.decodeIfPresent([String].self, forKey: .requires) ?? []
         guard !files.isEmpty else {
             throw DecodingError.dataCorruptedError(forKey: .files, in: container, debugDescription: "Manifest lists no files.")
         }
