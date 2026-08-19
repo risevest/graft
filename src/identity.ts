@@ -19,12 +19,18 @@ export function releaseIdentity(): ReleaseIdentity | null {
   if (typeof value !== 'object' || value === null) {
     return null;
   }
-  const { nativeBuild, releaseId } = value as Record<string, unknown>;
+  const { nativeBuild, nativeFingerprint, releaseId } = value as Record<
+    string,
+    unknown
+  >;
   if (releaseId !== null && typeof releaseId !== 'string') {
     return null;
   }
   if (nativeBuild !== null && typeof nativeBuild !== 'number') {
     return null;
   }
-  return { nativeBuild, releaseId };
+  if (nativeFingerprint !== null && typeof nativeFingerprint !== 'string') {
+    return null;
+  }
+  return { nativeBuild, nativeFingerprint, releaseId };
 }

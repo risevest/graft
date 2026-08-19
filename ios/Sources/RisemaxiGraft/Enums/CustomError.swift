@@ -16,7 +16,7 @@ public enum CustomError: Error {
     case manifestMismatch
     case manifestNameCollision
     case manifestUrlInvalid
-    case nativeBuildInvalid
+    case nativeFingerprintUnknown
     case notInitialized
     case patchChecksumMismatch
     case patchFailed
@@ -64,8 +64,8 @@ extension CustomError: LocalizedError {
                 comment: "manifestNameCollision")
         case .manifestUrlInvalid:
             return NSLocalizedString("The manifest URL is not on the configured server.", comment: "manifestUrlInvalid")
-        case .nativeBuildInvalid:
-            return NSLocalizedString("CFBundleVersion must be an integer to compare against minNativeBuild.", comment: "nativeBuildInvalid")
+        case .nativeFingerprintUnknown:
+            return NSLocalizedString("The embedded manifest carries no native fingerprint, so no release can be matched to this build.", comment: "nativeFingerprintUnknown")
         case .notInitialized:
             return NSLocalizedString("Graft failed to initialize.", comment: "notInitialized")
         case .patchChecksumMismatch:

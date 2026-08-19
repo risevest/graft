@@ -4,19 +4,29 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import { writeManifest } from './manifest.mjs';
+import {
+  DEFAULT_SOURCES,
+  describeChange,
+  fingerprint,
+} from './native-fingerprint.mjs';
 import { signManifestToFile } from './sign.mjs';
 
 const USAGE = `graft — release tooling for self-hosted OTA bundles
 
-  graft manifest --dir <bundle> --id <release> --counter <n> --min-native-build <n>
-                 [--channel <name>] [--not-before <epoch>] [--expires-at <epoch>] [--out <file>]
-                 [--requires <graft-requires.json>]
-  graft sign     <manifest> <signature-out>          key from GRAFT_SIGNING_KEY
-  graft patch    --old <bundle> --new <bundle> --out <patch.gpz> [--level 19]
-  graft apply    --base <bundle> --patch <patch.gpz> --manifest <manifest> --out <dir>
+  graft manifest    --dir <bundle> --id <release> --counter <n> --native-fingerprint <hash>
+                    [--channel <name>] [--not-before <epoch>] [--expires-at <epoch>] [--out <file>]
+                    [--requires <graft-requires.json>]
+  graft fingerprint [--root <dir>] [--source <path>]... [--full] [--against <fingerprint.json>]
+  graft sign        <manifest> <signature-out>       key from GRAFT_SIGNING_KEY
+  graft patch       --old <bundle> --new <bundle> --out <patch.gpz> [--level 19]
+  graft apply       --base <bundle> --patch <patch.gpz> --manifest <manifest> --out <dir>
 
 A manifest describes what graft will install and verify; the signature is what makes it
-authoritative. Patches are an optimisation the device can always do without.`;
+authoritative. Patches are an optimisation the device can always do without.
+
+The native fingerprint identifies the compiled binary a bundle was built against. A device runs a
+release only when the fingerprint matches its own, so a bundle never reaches a binary built from
+different native code.`;
 
 function delegate(script, argv) {
   const result = spawnSync(
@@ -42,7 +52,7 @@ try {
           'id': { type: 'string' },
           'channel': { type: 'string' },
           'counter': { type: 'string' },
-          'min-native-build': { type: 'string' },
+          'native-fingerprint': { type: 'string' },
           'not-before': { type: 'string' },
           'expires-at': { type: 'string' },
           'requires': { type: 'string' },
@@ -54,7 +64,7 @@ try {
         id: values.id,
         channel: values.channel,
         counter: values.counter,
-        minNativeBuild: values['min-native-build'],
+        nativeFingerprint: values['native-fingerprint'],
         notBefore: values['not-before'],
         expiresAt: values['expires-at'],
         requires: values.requires
@@ -63,6 +73,38 @@ try {
       });
       console.log(
         `${output}: ${manifest.files.length} files, counter ${manifest.counter}`,
+      );
+      break;
+    }
+    case 'fingerprint': {
+      const { values } = parseArgs({
+        args: argv,
+        options: {
+          root: { type: 'string' },
+          full: { type: 'boolean' },
+          against: { type: 'string' },
+          source: { type: 'string', multiple: true },
+        },
+      });
+      const result = fingerprint(values.root ?? process.cwd(), {
+        sources: values.source?.length
+          ? [...DEFAULT_SOURCES, ...values.source]
+          : DEFAULT_SOURCES,
+      });
+      if (values.against) {
+        const before = JSON.parse(readFileSync(values.against, 'utf8'));
+        const changed = describeChange(before, result);
+        if (changed.length > 0) {
+          console.error(
+            `native code changed since ${before.hash}:\n  ${changed.join('\n  ')}`,
+          );
+          process.exit(1);
+        }
+        console.log(`native code is unchanged (${result.hash})`);
+        break;
+      }
+      process.stdout.write(
+        values.full ? `${JSON.stringify(result, null, 2)}\n` : `${result.hash}\n`,
       );
       break;
     }

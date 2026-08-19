@@ -105,28 +105,28 @@ public final class GraftPointer {
      * same decision is made here — but only for bundles the new binary genuinely cannot serve.
      */
     private static void applyBinaryChangeRetention(@NonNull Context context) {
-        long nativeBuild = readNativeBuild(context);
-        if (nativeBuild < 0) {
-            Logger.error(GraftPlugin.TAG, "Cannot read the native build number, so a staged bundle cannot be reconciled.", null);
+        Manifest embeddedManifest = readEmbeddedManifest(context);
+        String fingerprint = embeddedManifest == null ? null : embeddedManifest.getNativeFingerprint();
+        if (fingerprint == null) {
+            Logger.error(GraftPlugin.TAG, "The embedded manifest carries no native fingerprint, so a staged bundle cannot be reconciled.", null);
             return;
         }
         SharedPreferences preferences = GraftPreferences.getSharedPreferences(context);
-        if (preferences.getLong(GraftPreferences.LAST_NATIVE_BUILD_KEY, -1) == nativeBuild) {
+        if (fingerprint.equals(preferences.getString(GraftPreferences.LAST_NATIVE_FINGERPRINT_KEY, null))) {
             return;
         }
 
-        Manifest embeddedManifest = readEmbeddedManifest(context);
         String activeBundleId = getActiveBundleId(context);
-        if (activeBundleId != null && !isBundleRunnable(context, activeBundleId, nativeBuild, embeddedManifest)) {
-            Logger.debug(GraftPlugin.TAG, "Discarding bundle " + activeBundleId + " on native build " + nativeBuild + ".");
+        if (activeBundleId != null && !isBundleRunnable(context, activeBundleId, fingerprint, embeddedManifest)) {
+            Logger.debug(GraftPlugin.TAG, "Discarding bundle " + activeBundleId + ": it was built against different native code.");
             clearActiveBundleId(context);
         }
         String lastKnownGoodBundleId = preferences.getString(GraftPreferences.LAST_KNOWN_GOOD_BUNDLE_ID_KEY, null);
-        if (lastKnownGoodBundleId != null && !isBundleRunnable(context, lastKnownGoodBundleId, nativeBuild, embeddedManifest)) {
+        if (lastKnownGoodBundleId != null && !isBundleRunnable(context, lastKnownGoodBundleId, fingerprint, embeddedManifest)) {
             preferences.edit().remove(GraftPreferences.LAST_KNOWN_GOOD_BUNDLE_ID_KEY).apply();
         }
 
-        SharedPreferences.Editor editor = preferences.edit().putLong(GraftPreferences.LAST_NATIVE_BUILD_KEY, nativeBuild);
+        SharedPreferences.Editor editor = preferences.edit().putString(GraftPreferences.LAST_NATIVE_FINGERPRINT_KEY, fingerprint);
         Long embeddedCounter = embeddedManifest == null ? null : embeddedManifest.getCounter();
         if (embeddedCounter != null && embeddedCounter > preferences.getLong(GraftPreferences.HIGHEST_INSTALLED_COUNTER_KEY, 0)) {
             editor.putLong(GraftPreferences.HIGHEST_INSTALLED_COUNTER_KEY, embeddedCounter);
@@ -137,14 +137,14 @@ public final class GraftPointer {
     private static boolean isBundleRunnable(
         @NonNull Context context,
         @NonNull String bundleId,
-        long nativeBuild,
+        @NonNull String nativeFingerprint,
         @Nullable Manifest embeddedManifest
     ) {
         Manifest manifest = readManifest(new File(buildBundleDirectory(context, bundleId), MANIFEST_FILE_NAME));
         if (manifest == null) {
             return false;
         }
-        if (manifest.getMinNativeBuild() > nativeBuild) {
+        if (!manifest.getNativeFingerprint().equals(nativeFingerprint)) {
             return false;
         }
         Long embeddedCounter = embeddedManifest == null ? null : embeddedManifest.getCounter();

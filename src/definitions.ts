@@ -186,7 +186,7 @@ export interface GraftPlugin {
    * On **Android**, this is the `versionCode` from the `android/app/build.gradle` file.
    * On **iOS**, this is the `CFBundleVersion` from the `Info.plist` file.
    *
-   * A release is only installed when its `minNativeBuild` is less than or equal to
+   * A release is only installed when its `nativeFingerprint` matches the one in
    * this value.
    *
    * Only available on Android and iOS.
@@ -248,7 +248,7 @@ export interface GraftPlugin {
    * Read the channel document, install the newest release this install is eligible for,
    * and stage it as the next bundle.
    *
-   * A release is eligible when its `minNativeBuild` is not greater than the app's version
+   * A release is eligible when its `nativeFingerprint` matches this binary's, its
    * code, its `counter` is greater than the highest counter ever installed, and its
    * `rollout` covers this install's bucket. The chosen release's manifest is verified
    * against `publicKey` before any asset is downloaded, and every installed file is
@@ -312,6 +312,12 @@ export interface ReleaseIdentity {
    * `null` when it is not an integer.
    */
   nativeBuild: number | null;
+  /**
+   * The fingerprint of the native code this binary was compiled from, taken from the manifest
+   * embedded in it. A release names the fingerprint it was built against, and the device runs it
+   * only when the two match. `null` only when the binary embeds no manifest.
+   */
+  nativeFingerprint: string | null;
   /**
    * The identifier of the bundle being served: the release id for a bundle installed by `sync()`,
    * the identifier it was staged under for one installed by `downloadBundle()`, or the `id` of the

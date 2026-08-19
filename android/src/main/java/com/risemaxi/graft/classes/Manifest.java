@@ -36,7 +36,8 @@ public class Manifest {
     @Nullable
     private final Long counter;
 
-    private final long minNativeBuild;
+    @NonNull
+    private final String nativeFingerprint;
 
     @Nullable
     private final Long notBefore;
@@ -58,7 +59,7 @@ public class Manifest {
         this.id = json.getString("id");
         this.channel = json.has("channel") ? json.getString("channel") : null;
         this.counter = json.has("counter") ? json.getLong("counter") : null;
-        this.minNativeBuild = json.getLong("minNativeBuild");
+        this.nativeFingerprint = json.getString("nativeFingerprint");
         this.notBefore = json.has("notBefore") ? json.getLong("notBefore") : null;
         this.expiresAt = json.has("expiresAt") ? json.getLong("expiresAt") : null;
         if (json.has("requires")) {
@@ -91,8 +92,9 @@ public class Manifest {
         return counter;
     }
 
-    public long getMinNativeBuild() {
-        return minNativeBuild;
+    @NonNull
+    public String getNativeFingerprint() {
+        return nativeFingerprint;
     }
 
     @Nullable

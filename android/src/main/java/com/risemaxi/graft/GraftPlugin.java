@@ -45,6 +45,8 @@ public class GraftPlugin extends Plugin {
     public static final String ERROR_MANIFEST_CONTRACT_UNMET = "The release needs a plugin this build does not have.";
     public static final String ERROR_MANIFEST_EXPIRED = "The manifest is not valid at the current time.";
     public static final String ERROR_MANIFEST_MISMATCH = "The manifest does not describe an acceptable release.";
+    public static final String ERROR_NATIVE_FINGERPRINT_UNKNOWN =
+        "The embedded manifest carries no native fingerprint, so no release can be matched to this build.";
     public static final String ERROR_MANIFEST_NAME_COLLISION =
         "A file in the release has the same name as the manifest, so one overwrites the other. Serve the manifest as graft-manifest.json.";
     public static final String ERROR_MANIFEST_URL_INVALID = "The manifest URL is not on the configured server.";

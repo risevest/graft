@@ -1,6 +1,6 @@
 {
   "name": "@risemaxi/graft",
-  "version": "0.4.1",
+  "version": "0.5.0",
   "description": "Self-hosted over-the-air web bundle updates for Capacitor apps, applied before the WebView loads.",
   "main": "dist/plugin.cjs.js",
   "module": "dist/esm/index.js",
@@ -43,6 +43,7 @@
     "watch": "tsc --watch",
     "verify": "bun run verify:web && bun run verify:android && bun run verify:ios",
     "verify:web": "bun run build",
+    "test": "node --test tools/*.test.mjs",
     "verify:android": "cd android && ./gradlew assembleDebug",
     "verify:ios": "xcodebuild -scheme RisemaxiGraft -destination 'generic/platform=iOS' -derivedDataPath .build/xcode",
     "lint": "bun run eslint && bun run prettier -- --check",

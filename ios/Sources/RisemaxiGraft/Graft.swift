@@ -96,9 +96,11 @@ import Capacitor
     /// What the page is told about the bundle it is running, as JSON, so an app never has to compile
     /// a release identifier into its own bundle.
     @objc public func releaseIdentityJSON() -> String {
-        let releaseId = GraftPointer.resolveActiveBundleId() ?? GraftPointer.readEmbeddedManifest()?.id
+        let embeddedManifest = GraftPointer.readEmbeddedManifest()
+        let releaseId = GraftPointer.resolveActiveBundleId() ?? embeddedManifest?.id
         let identity: [String: Any] = [
             "nativeBuild": GraftPointer.readNativeBuild() ?? NSNull(),
+            "nativeFingerprint": embeddedManifest?.nativeFingerprint ?? NSNull(),
             "releaseId": releaseId ?? NSNull()
         ]
         guard let data = try? JSONSerialization.data(withJSONObject: identity),
@@ -224,7 +226,7 @@ import Capacitor
         }
         guard let release = ReleaseSelector.select(
             from: document.releases,
-            versionCode: try nativeBuild(),
+            nativeFingerprint: try nativeFingerprint(),
             highestInstalledCounter: preferences.getHighestInstalledCounter(),
             bucket: ReleaseSelector.bucket(for: preferences.getInstallId()),
             blockedBundleIds: getBlockedBundleIds()
@@ -361,9 +363,9 @@ import Capacitor
     private func verifyManifestIsAcceptable(_ manifest: Manifest, release: ChannelRelease, channel: String) throws {
         guard manifest.id == release.id,
               let counter = manifest.counter, counter == release.counter,
-              manifest.minNativeBuild == release.minNativeBuild,
+              manifest.nativeFingerprint == release.nativeFingerprint,
               manifest.channel == channel,
-              manifest.minNativeBuild <= (try nativeBuild()),
+              manifest.nativeFingerprint == (try nativeFingerprint()),
               counter > preferences.getHighestInstalledCounter() else {
             throw CustomError.manifestMismatch
         }
@@ -577,11 +579,13 @@ import Capacitor
         return Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? ""
     }
 
-    private func nativeBuild() throws -> Int {
-        guard let nativeBuild = GraftPointer.readNativeBuild() else {
-            throw CustomError.nativeBuildInvalid
+    /// The binary's own fingerprint, taken from the manifest that shipped inside it. A release
+    /// naming a different one was built against different native code, so this build cannot run it.
+    private func nativeFingerprint() throws -> String {
+        guard let fingerprint = GraftPointer.readEmbeddedManifest()?.nativeFingerprint else {
+            throw CustomError.nativeFingerprintUnknown
         }
-        return nativeBuild
+        return fingerprint
     }
 
     private func hasBundleById(_ bundleId: String) -> Bool {

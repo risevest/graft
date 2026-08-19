@@ -8,7 +8,7 @@ public class GraftPreferences: NSObject {
     private let lastFailedBundleIdKey = "lastFailedBundleId"
     private let lastFailedCountKey = "lastFailedCount"
     private let lastKnownGoodBundleIdKey = "lastKnownGoodBundleId"
-    private let lastNativeBuildKey = "lastNativeBuild"
+    private let lastNativeFingerprintKey = "lastNativeFingerprint"
     private let previousBundleIdKey = "previousBundleId"
 
     public func getBlockedBundleIds() -> String? {
@@ -56,8 +56,8 @@ public class GraftPreferences: NSObject {
     }
 
     /// - Returns: The build the pointer was last reconciled against, or `nil` on a fresh install.
-    public func getLastNativeBuild() -> Int? {
-        return UserDefaults.standard.object(forKey: applyPrefix(to: lastNativeBuildKey)) as? Int
+    public func getLastNativeFingerprint() -> String? {
+        return UserDefaults.standard.object(forKey: applyPrefix(to: lastNativeFingerprintKey)) as? String
     }
 
     public func getPreviousBundleId() -> String? {
@@ -80,8 +80,8 @@ public class GraftPreferences: NSObject {
         setString(value, forKey: lastKnownGoodBundleIdKey)
     }
 
-    public func setLastNativeBuild(_ value: Int) {
-        UserDefaults.standard.set(value, forKey: applyPrefix(to: lastNativeBuildKey))
+    public func setLastNativeFingerprint(_ value: String) {
+        UserDefaults.standard.set(value, forKey: applyPrefix(to: lastNativeFingerprintKey))
     }
 
     public func setPreviousBundleId(_ value: String?) {

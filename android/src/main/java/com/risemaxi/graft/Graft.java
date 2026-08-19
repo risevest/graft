@@ -187,14 +187,18 @@ public class Graft {
      */
     @NonNull
     public JSObject getReleaseIdentity() {
+        Manifest embeddedManifest = GraftPointer.readEmbeddedManifest(plugin.getContext());
         String releaseId = GraftPointer.resolveActiveBundleId(plugin.getContext());
         if (releaseId == null) {
-            Manifest embeddedManifest = GraftPointer.readEmbeddedManifest(plugin.getContext());
             releaseId = embeddedManifest == null ? null : embeddedManifest.getId();
         }
 
         JSObject identity = new JSObject();
         identity.put("releaseId", releaseId == null ? JSONObject.NULL : releaseId);
+        identity.put(
+            "nativeFingerprint",
+            embeddedManifest == null ? JSONObject.NULL : embeddedManifest.getNativeFingerprint()
+        );
         try {
             identity.put("nativeBuild", getNativeBuild());
         } catch (PackageManager.NameNotFoundException exception) {
@@ -346,7 +350,7 @@ public class Graft {
                             }
                             ChannelRelease release = ReleaseSelector.select(
                                 document.getReleases(),
-                                getNativeBuild(),
+                                nativeFingerprint(),
                                 preferences.getHighestInstalledCounter(),
                                 ReleaseSelector.bucketFor(preferences.getInstallId()),
                                 getBlockedBundleIds()
@@ -649,12 +653,12 @@ public class Graft {
             !manifest.getId().equals(release.getId()) ||
             counter == null ||
             counter != release.getCounter() ||
-            manifest.getMinNativeBuild() != release.getMinNativeBuild() ||
+            !manifest.getNativeFingerprint().equals(release.getNativeFingerprint()) ||
             !channel.equals(manifest.getChannel())
         ) {
             throw new Exception(GraftPlugin.ERROR_MANIFEST_MISMATCH);
         }
-        if (manifest.getMinNativeBuild() > getNativeBuild()) {
+        if (!manifest.getNativeFingerprint().equals(nativeFingerprint())) {
             throw new Exception(GraftPlugin.ERROR_MANIFEST_MISMATCH);
         }
         if (counter <= preferences.getHighestInstalledCounter()) {
@@ -1025,6 +1029,20 @@ public class Graft {
 
     private long getNativeBuild() throws PackageManager.NameNotFoundException {
         return PackageInfoCompat.getLongVersionCode(getPackageInfo());
+    }
+
+    /**
+     * The binary's own fingerprint, taken from the manifest that shipped inside it. A release naming
+     * a different one was built against different native code, so this build cannot run it.
+     */
+    @NonNull
+    private String nativeFingerprint() throws Exception {
+        Manifest embeddedManifest = GraftPointer.readEmbeddedManifest(plugin.getContext());
+        String fingerprint = embeddedManifest == null ? null : embeddedManifest.getNativeFingerprint();
+        if (fingerprint == null) {
+            throw new Exception(GraftPlugin.ERROR_NATIVE_FINGERPRINT_UNKNOWN);
+        }
+        return fingerprint;
     }
 
     private boolean hasBundleById(@NonNull String bundleId) {

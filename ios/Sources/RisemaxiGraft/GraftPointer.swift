@@ -91,35 +91,35 @@ public enum GraftPointer {
     /// downgrade a device to whatever the store build embeds. We read our own pointer instead, so the
     /// same decision is made here — but only for bundles the new binary genuinely cannot serve.
     private static func applyBinaryChangeRetention() {
-        guard let nativeBuild = readNativeBuild() else {
-            CAPLog.print("[", GraftPlugin.tag, "] ", "CFBundleVersion is not an integer, so a staged bundle cannot be reconciled.")
+        let embeddedManifest = readEmbeddedManifest()
+        guard let fingerprint = embeddedManifest?.nativeFingerprint else {
+            CAPLog.print("[", GraftPlugin.tag, "] ", "The embedded manifest carries no native fingerprint, so a staged bundle cannot be reconciled.")
             return
         }
         let preferences = GraftPreferences()
-        if preferences.getLastNativeBuild() == nativeBuild {
+        if preferences.getLastNativeFingerprint() == fingerprint {
             return
         }
 
-        let embeddedManifest = readEmbeddedManifest()
-        if let bundleId = getActiveBundleId(), !isBundleRunnable(bundleId, nativeBuild: nativeBuild, embeddedManifest: embeddedManifest) {
-            CAPLog.print("[", GraftPlugin.tag, "] ", "Discarding bundle \(bundleId) on native build \(nativeBuild).")
+        if let bundleId = getActiveBundleId(), !isBundleRunnable(bundleId, nativeFingerprint: fingerprint, embeddedManifest: embeddedManifest) {
+            CAPLog.print("[", GraftPlugin.tag, "] ", "Discarding bundle \(bundleId): it was built against different native code.")
             clearActiveBundleId()
         }
         if let bundleId = preferences.getLastKnownGoodBundleId(),
-           !isBundleRunnable(bundleId, nativeBuild: nativeBuild, embeddedManifest: embeddedManifest) {
+           !isBundleRunnable(bundleId, nativeFingerprint: fingerprint, embeddedManifest: embeddedManifest) {
             preferences.setLastKnownGoodBundleId(nil)
         }
         if let embeddedCounter = embeddedManifest?.counter, embeddedCounter > preferences.getHighestInstalledCounter() {
             preferences.setHighestInstalledCounter(embeddedCounter)
         }
-        preferences.setLastNativeBuild(nativeBuild)
+        preferences.setLastNativeFingerprint(fingerprint)
     }
 
-    private static func isBundleRunnable(_ bundleId: String, nativeBuild: Int, embeddedManifest: Manifest?) -> Bool {
+    private static func isBundleRunnable(_ bundleId: String, nativeFingerprint: String, embeddedManifest: Manifest?) -> Bool {
         guard let manifest = readManifest(at: buildBundleDirectory(bundleId: bundleId).appendingPathComponent(manifestFileName)) else {
             return false
         }
-        if manifest.minNativeBuild > nativeBuild {
+        if manifest.nativeFingerprint != nativeFingerprint {
             return false
         }
         guard let embeddedCounter = embeddedManifest?.counter, let counter = manifest.counter else {

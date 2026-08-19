@@ -6,12 +6,12 @@ public struct ChannelRelease: Decodable {
     let id: String
     let counter: Int
     let rollout: Int
-    let minNativeBuild: Int
+    let nativeFingerprint: String
     let manifest: String
     let sig: String
 
     private enum CodingKeys: String, CodingKey {
-        case id, counter, rollout, minNativeBuild, manifest, sig
+        case id, counter, rollout, nativeFingerprint, manifest, sig
     }
 
     public init(from decoder: Decoder) throws {
@@ -22,7 +22,7 @@ public struct ChannelRelease: Decodable {
         guard rollout >= 0 && rollout <= 100 else {
             throw DecodingError.dataCorruptedError(forKey: .rollout, in: container, debugDescription: "rollout must be between 0 and 100: \(rollout)")
         }
-        minNativeBuild = try container.decode(Int.self, forKey: .minNativeBuild)
+        nativeFingerprint = try container.decode(String.self, forKey: .nativeFingerprint)
         manifest = try container.decode(String.self, forKey: .manifest)
         sig = try container.decode(String.self, forKey: .sig)
     }

@@ -74,7 +74,7 @@ manifest before a bundle is installed.
       "id": "r-1042",
       "counter": 1042,
       "rollout": 25,
-      "minNativeBuild": 17862387,
+      "nativeFingerprint": "9f2c1ab4e77d5306",
       "manifest": "/v1/releases/r-1042/graft-manifest.json",
       "sig": "<base64 RSA PKCS#1 v1.5 over SHA-256 of the manifest bytes>",
     },
@@ -82,7 +82,7 @@ manifest before a bundle is installed.
 }
 ```
 
-A release is eligible when `minNativeBuild <= versionCode`, `counter > highestInstalledCounter`,
+A release is eligible when `nativeFingerprint` equals this binary's, `counter > highestInstalledCounter`,
 `rollout > bucket`, and its id is not blocked. The highest-counter eligible release wins; if none is,
 the device stays put. `killSwitch` clears the pointer, so the next launch serves the embedded bundle.
 
@@ -112,16 +112,16 @@ and upload, and never parsed before the signature verifies.
   "id": "r-1042",
   "channel": "production",
   "counter": 1042,
-  "minNativeBuild": 17862387,
+  "nativeFingerprint": "9f2c1ab4e77d5306",
   "notBefore": 1786238700,
   "expiresAt": 1793928700,
   "files": [{ "href": "index.html", "sha256": "<hex>", "size": 1234 }],
 }
 ```
 
-After the signature verifies, the manifest is rejected unless `id`, `counter` and `minNativeBuild`
+After the signature verifies, the manifest is rejected unless `id`, `counter` and `nativeFingerprint`
 match the channel entry, `channel` matches the channel it was fetched from,
-`minNativeBuild <= versionCode`, `counter > highestInstalledCounter`, and
+`nativeFingerprint` equals this binary's, `counter > highestInstalledCounter`, and
 `notBefore <= now < expiresAt`. `href` must be a relative path with no `.` or `..` segment.
 
 `channel`, `counter`, `notBefore` and `expiresAt` are optional to parse and required to verify. The
@@ -197,7 +197,7 @@ by name — that a consumer reimplementing them will get one of them wrong, and 
 as a signature error on a manifest that was signed correctly.
 
 ```sh
-graft manifest --dir dist --id r-1042 --counter 1042 --min-native-build 17862387 \
+graft manifest --dir dist --id r-1042 --counter 1042 --native-fingerprint "$(graft fingerprint)" \
                --channel production --not-before 1786238700 --expires-at 1793928700
 GRAFT_SIGNING_KEY="$(cat private.pem)" graft sign dist/graft-manifest.json manifest.sig
 graft patch --old <previous bundle> --new dist --out r-1041__r-1042.gpz
@@ -255,7 +255,7 @@ the chance of signing a stale directory:
 ```ts
 import { vite as graftManifest } from '@risemaxi/graft/tools/unplugin.mjs';
 
-graftManifest({ dir: 'dist', id, counter, minNativeBuild });
+graftManifest({ dir: 'dist', id, counter, nativeFingerprint });
 ```
 
 `unplugin` is an optional peer, and the same factory exports `rollup`, `rolldown`, `webpack`,
@@ -267,13 +267,17 @@ every file has to be read off disk to be digested anyway.
 
 ### Requirements on the consuming app
 
-**The build number must be an integer, and must mean the same thing on both platforms.**
-`minNativeBuild` is compared against Android's `versionCode` and iOS's `CFBundleVersion`, so a
-release published for build 480 must be the same release for build 480 on either platform. Android's
-`versionCode` is always an integer; `CFBundleVersion` is not — Apple also accepts `1.0.3`, and graft
-cannot order those against a `versionCode`. A non-integer `CFBundleVersion` makes `sync()` fail with
-`CFBundleVersion must be an integer…` and leaves a staged bundle unreconciled after a native release,
-so set it to the same integer you set `versionCode` to.
+**Every native build must embed a manifest carrying its own fingerprint.** `graft fingerprint`
+hashes the native inputs — the plugin packages the app declares, and the version-controlled native
+sources — and the value goes into the manifest shipped inside the binary. That is how the device
+knows its own identity; there is nothing to configure and no number to keep in step across
+platforms. A release names the fingerprint it was built against, and a device runs it only when the
+two are equal, so a bundle can never reach a binary compiled from different native code.
+
+Regenerate the fingerprint whenever the native build is cut, not when the web bundle is built. The
+two directories a Capacitor app generates, `ios/` and `android/`, are outputs of these inputs rather
+than inputs themselves, so they are deliberately not hashed — fingerprinting them would make every
+`cap sync` look like a native change.
 
 **Releases and native builds must be counted on one scale, or the embedded bundle must not claim a
 counter.** On a native release graft compares the embedded bundle's `counter` against the staged
@@ -282,8 +286,8 @@ the same sequence. The simplest way to satisfy it is to derive both from one mon
 timestamp ordinal such as `Math.round(Date.now() / 100000)` works, and needs no registry.
 
 If your OTA releases are counted independently of your native builds, **omit `counter` from the
-embedded manifest**. Graft then skips the comparison and keeps a staged bundle whenever
-`minNativeBuild` allows it. Supplying a number that does not compare is the one genuinely dangerous
+embedded manifest**. Graft then skips the comparison and keeps a staged bundle whenever its
+fingerprint still matches. Supplying a number that does not compare is the one genuinely dangerous
 option: an embedded counter that always outranks your release counters makes every store release
 discard every staged bundle, which is the silent downgrade this rule exists to prevent.
 
@@ -323,7 +327,7 @@ population that matters.
 
 Capacitor discards its own server path whenever the binary changes, which silently downgrades users
 to whatever the store build embeds. Graft reads its own pointer and reconciles it deliberately, in
-the pre-WebView hook: a staged bundle survives a native release when its `minNativeBuild` allows the
+the pre-WebView hook: a staged bundle survives a native release when its `nativeFingerprint` still matches the
 new build and the embedded bundle's `counter` is not higher. Bundles with no manifest — anything
 staged by hand through `downloadBundle()` — are dropped on any binary change.
 

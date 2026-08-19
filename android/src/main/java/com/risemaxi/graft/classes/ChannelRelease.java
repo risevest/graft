@@ -15,7 +15,8 @@ public class ChannelRelease {
 
     private final long counter;
     private final int rollout;
-    private final long minNativeBuild;
+    @NonNull
+    private final String nativeFingerprint;
 
     @NonNull
     private final String manifest;
@@ -27,7 +28,7 @@ public class ChannelRelease {
         this.id = json.getString("id");
         this.counter = json.getLong("counter");
         this.rollout = json.getInt("rollout");
-        this.minNativeBuild = json.getLong("minNativeBuild");
+        this.nativeFingerprint = json.getString("nativeFingerprint");
         this.manifest = json.getString("manifest");
         this.signature = json.getString("sig");
         if (rollout < 0 || rollout > 100) {
@@ -48,8 +49,9 @@ public class ChannelRelease {
         return rollout;
     }
 
-    public long getMinNativeBuild() {
-        return minNativeBuild;
+    @NonNull
+    public String getNativeFingerprint() {
+        return nativeFingerprint;
     }
 
     @NonNull
