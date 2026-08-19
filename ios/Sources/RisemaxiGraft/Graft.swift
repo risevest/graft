@@ -232,11 +232,6 @@ import Capacitor
             CAPLog.print("[", GraftPlugin.tag, "] ", "No update available.")
             return SyncResult(nextBundleId: nil)
         }
-        if hasBundleById(release.id) {
-            stageRelease(bundleId: release.id, counter: release.counter)
-            return SyncResult(nextBundleId: release.id)
-        }
-
         let manifestUrl = try resolveManifestUrl(channelUrl: channelUrl, manifest: release.manifest)
         CAPLog.print("[", GraftPlugin.tag, "] Reading manifest: ", manifestUrl)
         let manifestData = try await httpClient.data(url: manifestUrl)
@@ -244,8 +239,16 @@ import Capacitor
         try verifySignature(content: manifestData, signature: release.sig, publicKey: publicKey)
         let manifest = try JSONDecoder().decode(Manifest.self, from: manifestData)
         try verifyManifestIsAcceptable(manifest, release: release, channel: channel)
-        try verifyNoFileCollidesWithManifest(manifest, manifestUrl: manifestUrl)
 
+        // An interrupted install leaves a verified bundle on disk; reusing it skips the download
+        // only. The contract and the expiry describe this moment, not those files, and the binary
+        // can have been replaced since they landed.
+        if hasBundleById(release.id) {
+            stageRelease(bundleId: release.id, counter: release.counter)
+            return SyncResult(nextBundleId: release.id)
+        }
+
+        try verifyNoFileCollidesWithManifest(manifest, manifestUrl: manifestUrl)
         try await install(manifest: manifest, manifestData: manifestData, manifestUrl: manifestUrl)
         stageRelease(bundleId: manifest.id, counter: release.counter)
         return SyncResult(nextBundleId: manifest.id)

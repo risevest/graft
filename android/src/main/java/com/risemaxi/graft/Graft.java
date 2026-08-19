@@ -356,11 +356,6 @@ public class Graft {
                                 completion.success(new SyncResult(null));
                                 return;
                             }
-                            if (hasBundleById(release.getId())) {
-                                stageRelease(release.getId(), release.getCounter());
-                                completion.success(new SyncResult(release.getId()));
-                                return;
-                            }
                             installRelease(channelUrl, release, channel, publicKey, completion);
                         } catch (Exception exception) {
                             completion.error(exception);
@@ -399,6 +394,14 @@ public class Graft {
                         verifySignature(manifestBytes, release.getSignature(), publicKey);
                         Manifest manifest = new Manifest(new JSONObject(new String(manifestBytes, StandardCharsets.UTF_8)));
                         verifyManifestIsAcceptable(manifest, release, channel);
+                        // An interrupted install leaves a verified bundle on disk; reusing it skips
+                        // the download only. The contract and the expiry describe this moment, not
+                        // those files, and the binary can have been replaced since they landed.
+                        if (hasBundleById(release.getId())) {
+                            stageRelease(release.getId(), release.getCounter());
+                            completion.success(new SyncResult(release.getId()));
+                            return;
+                        }
                         verifyNoFileCollidesWithManifest(manifestUrl, manifest);
                         installManifest(manifestUrl, manifest, manifestBytes, completion);
                     } catch (Exception exception) {

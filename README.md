@@ -13,8 +13,8 @@ Pre-release. The lifecycle, the native pointer, the self-hosted protocol and bin
 implemented on both platforms; a release is fetched as a patch when one is published and falls back
 to whole files otherwise, and that path has run end to end on a device.
 
-Contract gating is half-built: the bundle side derives a `requires` set and puts it in the signed
-manifest, but no device checks it yet, so `minNativeBuild` remains the only gate that runs.
+Contract gating runs end to end: the bundle side derives a `requires` set into the signed manifest,
+and both platforms refuse a release naming a plugin the running build does not have.
 
 ## Install
 
@@ -237,6 +237,15 @@ Only calls in modules importing `registerPlugin` from `@capacitor/core` count. T
 Capacitor's alone — gsap exports one too — and matching on the call alone reports every
 `gsap.registerPlugin(CSSPlugin)` as an underivable plugin. The `Capacitor.Plugins` check is likewise
 scoped to first-party modules, because Capacitor's own bridge reaches plugins that way by design.
+
+On device the contract is checked against the live bridge — `Bridge.getPlugin` on Android,
+`bridge.plugin(withName:)` on iOS — so it answers from the plugins the running binary actually
+registered rather than from anything the build recorded. A name the bridge does not know fails the
+update with `The release needs a plugin this build does not have.` The check sits in manifest
+verification, which every path to staging goes through — including the one that reuses a bundle an
+interrupted install left on disk, where the binary may have been replaced since those files landed.
+A rejected release neither downloads files nor raises the installed counter, so a later release at
+the same counter still installs.
 
 ### As a bundler plugin
 
