@@ -2,11 +2,8 @@ import CryptoKit
 import Foundation
 import libzstd
 
-/// Applies a patch archive produced by `tools/make-patch.mjs`.
-///
-/// The plan inside the archive says how to reconstruct each file; it never says whether the result is
-/// acceptable. Reconstruction is driven by the signed manifest's file list, every output file is
-/// verified against its manifest digest, and a manifest entry the plan does not cover is an error.
+/// The plan says how to reconstruct each file, never whether the result is acceptable: drive this from
+/// the signed manifest's file list, not from the plan.
 enum GraftPatch {
     private static let magic: [UInt8] = Array("GRAFTP1\n".utf8)
     private static let schema = 1
@@ -82,9 +79,6 @@ enum GraftPatch {
         }
     }
 
-    /// `--patch-from` emits a frame that references the base as a raw content prefix, so applying one is
-    /// ordinary decompression with `ZSTD_DCtx_refPrefix` — no patch library is involved, and the prefix
-    /// is referenced rather than copied.
     private static func decompress(_ input: [UInt8], prefix: [UInt8]?, expectedSize: Int?) throws -> [UInt8] {
         guard let context = ZSTD_createDCtx() else {
             throw CustomError.patchFailed
@@ -130,8 +124,6 @@ enum GraftPatch {
         return output
     }
 
-    /// A base the plan names but the bundle does not have is a patch failure like any other, not a
-    /// stray Foundation error — the caller logs it and falls back to a full download either way.
     private static func readBase(_ base: URL, _ operation: [String: Any]) throws -> [UInt8] {
         guard let data = try? Data(contentsOf: base.appendingPathComponent(try safeHref(operation, "from"))) else {
             throw CustomError.patchFailed
@@ -168,8 +160,7 @@ enum GraftPatch {
         return block
     }
 
-    /// The plan is untrusted input, so a base href it names is held to the same rule as a manifest
-    /// href: relative, and no segment that could climb out of the bundle directory.
+    /// The plan is untrusted input, so its hrefs get the same relative-path rule as the manifest's.
     private static func safeHref(_ operation: [String: Any], _ key: String) throws -> String {
         guard let href = operation[key] as? String, !href.isEmpty, !href.hasPrefix("/") else {
             throw CustomError.patchFailed

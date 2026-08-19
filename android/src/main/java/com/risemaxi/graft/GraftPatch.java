@@ -18,11 +18,8 @@ import org.json.JSONArray;
 import org.json.JSONObject;
 
 /**
- * Applies a patch archive produced by `tools/make-patch.mjs`.
- *
- * <p>The plan inside the archive says how to reconstruct each file; it never says whether the result
- * is acceptable. Reconstruction is driven by the signed manifest's file list, every output file is
- * verified against its manifest digest, and a manifest entry the plan does not cover is an error.
+ * The plan says how to reconstruct each file, never whether the result is acceptable: drive this from
+ * the signed manifest's file list, not from the plan.
  */
 final class GraftPatch {
 
@@ -114,10 +111,6 @@ final class GraftPatch {
         return byHref;
     }
 
-    /**
-     * `--patch-from` emits a frame that references the base as a raw content dictionary, so applying
-     * one is ordinary decompression with a prefix loaded — no patch library is involved.
-     */
     @NonNull
     private static byte[] patch(@NonNull byte[] base, @NonNull byte[] delta, long size) throws Exception {
         if (size < 0 || size > Integer.MAX_VALUE) {
@@ -158,10 +151,6 @@ final class GraftPatch {
         return out.toByteArray();
     }
 
-    /**
-     * A base the plan names but the bundle does not have is a patch failure like any other, not a stray
-     * filesystem error — the caller logs it and falls back to a full download either way.
-     */
     @NonNull
     private static byte[] readBase(@NonNull BaseReader base, @NonNull JSONObject operation) throws Exception {
         try {
@@ -197,10 +186,7 @@ final class GraftPatch {
         return block;
     }
 
-    /**
-     * The plan is untrusted input, so a base href it names is held to the same rule as a manifest
-     * href: relative, and no segment that could climb out of the bundle directory.
-     */
+    /** The plan is untrusted input, so its hrefs get the same relative-path rule as the manifest's. */
     @NonNull
     private static String safeHref(@NonNull String href) throws Exception {
         if (href.isEmpty() || href.startsWith("/")) {
