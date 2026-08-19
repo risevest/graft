@@ -41,6 +41,7 @@ public class GraftPlugin: CAPPlugin, CAPBridgedPlugin {
         let implementation = Graft(config: graftConfig(), plugin: self)
         self.implementation = implementation
 
+        warnIfPointerIsNotWired()
         publishReleaseIdentity(implementation)
         implementation.handleLoad()
 
@@ -49,6 +50,22 @@ public class GraftPlugin: CAPPlugin, CAPBridgedPlugin {
             selector: #selector(handleAppWillEnterForeground),
             name: UIApplication.willEnterForegroundNotification,
             object: nil
+        )
+    }
+
+    /// Nothing else notices this. If the pre-WebView hook is not wired, Capacitor serves the bundle
+    /// compiled into the binary, graft carries on downloading, verifying, installing and pointing at
+    /// releases that will never load, and every log line looks healthy. The usual cause is an iOS
+    /// project regenerated or synced without reapplying `GraftViewController`.
+    private func warnIfPointerIsNotWired() {
+        guard !GraftPointer.wasAskedForBundleDirectory else { return }
+        CAPLog.print(
+            "[", GraftPlugin.tag, "] ",
+            "Nothing asked which bundle to serve before the WebView was built, so this launch is "
+                + "serving the bundle inside the binary and no update can ever take effect. Use "
+                + "GraftViewController as the root view controller, or assign "
+                + "GraftPointer.resolveActiveBundleDirectory() to appLocation in your own "
+                + "instanceDescriptor() override."
         )
     }
 
