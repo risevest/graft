@@ -1,6 +1,6 @@
 {
   "name": "@risemaxi/graft",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Self-hosted over-the-air web bundle updates for Capacitor apps, applied before the WebView loads.",
   "main": "dist/plugin.cjs.js",
   "module": "dist/esm/index.js",
