@@ -34,10 +34,26 @@ public final class GraftPointer {
     private GraftPointer() {}
 
     /**
+     * Set when a host asks where to serve from, which is the only moment the pointer can take effect.
+     * Graft's own reads deliberately bypass this, so it records the host wiring and nothing else.
+     */
+    private static boolean wasAskedForBundleDirectory = false;
+
+    static boolean wasAskedForBundleDirectory() {
+        return wasAskedForBundleDirectory;
+    }
+
+    /**
      * @return The directory to serve, or `null` to serve the bundle embedded in the binary.
      */
     @Nullable
     public static File resolveActiveBundleDirectory(@NonNull Context context) {
+        wasAskedForBundleDirectory = true;
+        return activeBundleDirectory(context);
+    }
+
+    @Nullable
+    private static File activeBundleDirectory(@NonNull Context context) {
         applyBinaryChangeRetention(context);
         String bundleId = getActiveBundleId(context);
         if (bundleId == null) {
@@ -56,7 +72,7 @@ public final class GraftPointer {
      */
     @Nullable
     public static String resolveActiveBundleId(@NonNull Context context) {
-        File directory = resolveActiveBundleDirectory(context);
+        File directory = activeBundleDirectory(context);
         return directory == null ? null : directory.getName();
     }
 

@@ -11,7 +11,17 @@ public enum GraftPointer {
     static let indexFileName = "index.html"
     static let manifestFileName = "graft-manifest.json"
 
+    /// Set when a host asks where to serve from, which is the only moment the pointer can take
+    /// effect. Graft's own reads deliberately bypass this, so it records the host wiring and nothing
+    /// else.
+    private(set) static var wasAskedForBundleDirectory = false
+
     public static func resolveActiveBundleDirectory() -> URL {
+        wasAskedForBundleDirectory = true
+        return activeBundleDirectory()
+    }
+
+    private static func activeBundleDirectory() -> URL {
         applyBinaryChangeRetention()
         guard let bundleId = getActiveBundleId() else {
             return buildEmbeddedBundleDirectory()
@@ -26,7 +36,7 @@ public enum GraftPointer {
     /// The id of the bundle this launch resolved, or `nil` for the embedded one. Unlike the bridge's
     /// server path this is available before the WebView exists.
     public static func resolveActiveBundleId() -> String? {
-        let name = resolveActiveBundleDirectory().lastPathComponent
+        let name = activeBundleDirectory().lastPathComponent
         return name == embeddedWebAssetDir ? nil : name
     }
 

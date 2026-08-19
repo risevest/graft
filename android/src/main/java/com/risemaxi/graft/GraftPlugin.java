@@ -70,11 +70,32 @@ public class GraftPlugin extends Plugin {
 
     public void load() {
         try {
+            warnIfPointerIsNotWired();
             implementation = new Graft(getGraftConfig(), this);
             publishReleaseIdentity(implementation);
         } catch (Exception exception) {
             Logger.error(TAG, exception.getMessage(), exception);
         }
+    }
+
+    /**
+     * Nothing else notices this. If the pre-WebView hook is not wired, Capacitor serves the bundle
+     * compiled into the binary, graft carries on downloading, verifying, installing and pointing at
+     * releases that will never load, and every log line looks healthy. The usual cause is a native
+     * project regenerated or synced without restoring the launcher activity.
+     */
+    private void warnIfPointerIsNotWired() {
+        if (GraftPointer.wasAskedForBundleDirectory()) {
+            return;
+        }
+        Logger.error(
+            TAG,
+            "Nothing asked which bundle to serve before the WebView was built, so this launch is " +
+                "serving the bundle inside the binary and no update can ever take effect. Set the " +
+                "launcher activity to com.risemaxi.graft.GraftActivity, or call " +
+                "GraftPointer.resolveActiveBundleDirectory(this) from your own BridgeActivity.load().",
+            null
+        );
     }
 
     /**
