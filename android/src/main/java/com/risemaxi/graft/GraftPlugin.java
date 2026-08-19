@@ -42,6 +42,7 @@ public class GraftPlugin extends Plugin {
     public static final String ERROR_DOWNLOAD_FAILED = "Bundle could not be downloaded.";
     public static final String ERROR_HTTP_TIMEOUT = "Request timed out.";
     public static final String ERROR_INSTALL_FAILED = "Bundle could not be installed.";
+    public static final String ERROR_MANIFEST_CONTRACT_UNMET = "The release needs a plugin this build does not have.";
     public static final String ERROR_MANIFEST_EXPIRED = "The manifest is not valid at the current time.";
     public static final String ERROR_MANIFEST_MISMATCH = "The manifest does not describe an acceptable release.";
     public static final String ERROR_MANIFEST_NAME_COLLISION =

@@ -38,12 +38,6 @@ function canonical(value) {
   return value;
 }
 
-/**
- * Describes a built bundle directory as the file set graft will install and verify.
- *
- * The digest of every file has to be read off disk regardless, so the directory is enumerated rather
- * than taken from a bundler's records — which also means this works on output no bundler produced.
- */
 export function buildManifest({
   dir,
   id,
@@ -52,6 +46,7 @@ export function buildManifest({
   channel,
   notBefore,
   expiresAt,
+  requires,
 }) {
   for (const [name, value] of [
     ['dir', dir],
@@ -66,8 +61,7 @@ export function buildManifest({
   const files = [];
   for (const path of walk(dir)) {
     const href = relative(dir, path).split(sep).join('/');
-    // Graft writes the manifest into every bundle it installs, so a bundle that already contains one
-    // would end up disagreeing with the file set that was signed.
+    // Graft writes this into every bundle it installs; one already present would disagree with what was signed.
     if (href === MANIFEST_FILE_NAME) continue;
     const content = readFileSync(path);
     files.push({
@@ -91,8 +85,15 @@ export function buildManifest({
     minNativeBuild: ordinal('minNativeBuild', minNativeBuild),
     files,
   };
-  // Release-only. Graft rejects a manifest served on a channel that omits any of them, and the
-  // bundle embedded in the binary has none of them to name.
+  if (requires !== undefined) {
+    if (
+      !Array.isArray(requires) ||
+      requires.some(name => typeof name !== 'string')
+    ) {
+      throw new Error('requires must be an array of plugin names');
+    }
+    manifest.requires = [...requires].sort();
+  }
   if (channel) manifest.channel = channel;
   if (notBefore !== undefined)
     manifest.notBefore = ordinal('notBefore', notBefore);

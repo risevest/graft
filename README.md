@@ -11,9 +11,10 @@ See `NOTICE` and `UPSTREAM.md`.
 
 Pre-release. The lifecycle, the native pointer, the self-hosted protocol and binary deltas are
 implemented on both platforms; a release is fetched as a patch when one is published and falls back
-to whole files otherwise. The apply paths compile and their zstd semantics are verified against a
-real bundle, but neither has yet run end to end on a device. `requires`/`provides` contract gating
-is not implemented — `minNativeBuild` is the only compatibility gate today.
+to whole files otherwise, and that path has run end to end on a device.
+
+Contract gating runs end to end: the bundle side derives a `requires` set into the signed manifest,
+and both platforms refuse a release naming a plugin the running build does not have.
 
 ## Install
 
@@ -207,6 +208,44 @@ graft apply --base <previous bundle> --patch r-1041__r-1042.gpz \
 `graft apply` is a reference implementation and a conformance check for the native apply paths — it
 is not what runs on device. What the release pipeline owns is the part graft cannot know: where the
 files are hosted, which counter a release gets, and when a channel points at it.
+
+### Deriving the plugin contract
+
+A bundle can only reach native code through a `registerPlugin` proxy, so the set of names it passes
+to `registerPlugin` _is_ its contract. `graftRequires` collects them while the bundle is built and
+writes them out:
+
+```ts
+import { requiresVite as graftRequires } from '@risemaxi/graft/tools/unplugin.mjs';
+
+graftRequires({ out: 'graft-requires.json' });
+```
+
+```sh
+graft manifest --dir dist --requires graft-requires.json …
+```
+
+It must run inside the build. Minification rewrites the call sites — a built bundle contains zero
+recognisable `registerPlugin(` calls — so there is nothing to scan afterwards.
+
+Two things make a derived contract untrustworthy, and both fail the build rather than warn: a
+`registerPlugin` call whose name is not a literal, and first-party code reaching plugins through
+`Capacitor.Plugins`. A contract that is too small is worse than none, because the device then accepts
+a bundle it cannot run.
+
+Only calls in modules importing `registerPlugin` from `@capacitor/core` count. The name is not
+Capacitor's alone — gsap exports one too — and matching on the call alone reports every
+`gsap.registerPlugin(CSSPlugin)` as an underivable plugin. The `Capacitor.Plugins` check is likewise
+scoped to first-party modules, because Capacitor's own bridge reaches plugins that way by design.
+
+On device the contract is checked against the live bridge — `Bridge.getPlugin` on Android,
+`bridge.plugin(withName:)` on iOS — so it answers from the plugins the running binary actually
+registered rather than from anything the build recorded. A name the bridge does not know fails the
+update with `The release needs a plugin this build does not have.` The check sits in manifest
+verification, which every path to staging goes through — including the one that reuses a bundle an
+interrupted install left on disk, where the binary may have been replaced since those files landed.
+A rejected release neither downloads files nor raises the installed counter, so a later release at
+the same counter still installs.
 
 ### As a bundler plugin
 

@@ -47,6 +47,9 @@ public class Manifest {
     @NonNull
     private final List<ManifestFile> files = new ArrayList<>();
 
+    /** Plugin jsNames the bundle can reach. Absent on a manifest built before contracts existed. */
+    private final List<String> requires = new ArrayList<>();
+
     public Manifest(@NonNull JSONObject json) throws JSONException {
         int schema = json.getInt("schema");
         if (schema != SUPPORTED_SCHEMA) {
@@ -58,6 +61,12 @@ public class Manifest {
         this.minNativeBuild = json.getLong("minNativeBuild");
         this.notBefore = json.has("notBefore") ? json.getLong("notBefore") : null;
         this.expiresAt = json.has("expiresAt") ? json.getLong("expiresAt") : null;
+        if (json.has("requires")) {
+            JSONArray required = json.getJSONArray("requires");
+            for (int index = 0; index < required.length(); index += 1) {
+                this.requires.add(required.getString(index));
+            }
+        }
         JSONArray filesJson = json.getJSONArray("files");
         for (int i = 0; i < filesJson.length(); i++) {
             files.add(new ManifestFile(filesJson.getJSONObject(i)));
@@ -94,6 +103,11 @@ public class Manifest {
     @Nullable
     public Long getExpiresAt() {
         return expiresAt;
+    }
+
+    @NonNull
+    public List<String> getRequires() {
+        return requires;
     }
 
     @NonNull

@@ -232,11 +232,6 @@ import Capacitor
             CAPLog.print("[", GraftPlugin.tag, "] ", "No update available.")
             return SyncResult(nextBundleId: nil)
         }
-        if hasBundleById(release.id) {
-            stageRelease(bundleId: release.id, counter: release.counter)
-            return SyncResult(nextBundleId: release.id)
-        }
-
         let manifestUrl = try resolveManifestUrl(channelUrl: channelUrl, manifest: release.manifest)
         CAPLog.print("[", GraftPlugin.tag, "] Reading manifest: ", manifestUrl)
         let manifestData = try await httpClient.data(url: manifestUrl)
@@ -244,8 +239,16 @@ import Capacitor
         try verifySignature(content: manifestData, signature: release.sig, publicKey: publicKey)
         let manifest = try JSONDecoder().decode(Manifest.self, from: manifestData)
         try verifyManifestIsAcceptable(manifest, release: release, channel: channel)
-        try verifyNoFileCollidesWithManifest(manifest, manifestUrl: manifestUrl)
 
+        // An interrupted install leaves a verified bundle on disk; reusing it skips the download
+        // only. The contract and the expiry describe this moment, not those files, and the binary
+        // can have been replaced since they landed.
+        if hasBundleById(release.id) {
+            stageRelease(bundleId: release.id, counter: release.counter)
+            return SyncResult(nextBundleId: release.id)
+        }
+
+        try verifyNoFileCollidesWithManifest(manifest, manifestUrl: manifestUrl)
         try await install(manifest: manifest, manifestData: manifestData, manifestUrl: manifestUrl)
         stageRelease(bundleId: manifest.id, counter: release.counter)
         return SyncResult(nextBundleId: manifest.id)
@@ -368,6 +371,18 @@ import Capacitor
         guard let notBefore = manifest.notBefore, let expiresAt = manifest.expiresAt,
               now >= notBefore, now < expiresAt else {
             throw CustomError.manifestExpired
+        }
+        try verifyContractIsSatisfied(manifest)
+    }
+
+    /// A bundle reaches native only through a registerPlugin proxy, so a plugin the binary does not
+    /// have is a bundle this build cannot run. Checked against the bridge rather than a recorded list,
+    /// because the binary is the only thing that knows what it actually shipped.
+    private func verifyContractIsSatisfied(_ manifest: Manifest) throws {
+        guard let bridge = plugin.bridge else { return }
+        for name in manifest.requires where bridge.plugin(withName: name) == nil {
+            CAPLog.print("[", GraftPlugin.tag, "] ", "This build has no plugin named \(name)")
+            throw CustomError.manifestContractUnmet
         }
     }
 

@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { spawnSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import { writeManifest } from './manifest.mjs';
@@ -9,6 +10,7 @@ const USAGE = `graft — release tooling for self-hosted OTA bundles
 
   graft manifest --dir <bundle> --id <release> --counter <n> --min-native-build <n>
                  [--channel <name>] [--not-before <epoch>] [--expires-at <epoch>] [--out <file>]
+                 [--requires <graft-requires.json>]
   graft sign     <manifest> <signature-out>          key from GRAFT_SIGNING_KEY
   graft patch    --old <bundle> --new <bundle> --out <patch.gpz> [--level 19]
   graft apply    --base <bundle> --patch <patch.gpz> --manifest <manifest> --out <dir>
@@ -43,6 +45,7 @@ try {
           'min-native-build': { type: 'string' },
           'not-before': { type: 'string' },
           'expires-at': { type: 'string' },
+          'requires': { type: 'string' },
         },
       });
       const { manifest, output } = writeManifest({
@@ -54,6 +57,9 @@ try {
         minNativeBuild: values['min-native-build'],
         notBefore: values['not-before'],
         expiresAt: values['expires-at'],
+        requires: values.requires
+          ? JSON.parse(readFileSync(values.requires, 'utf8'))
+          : undefined,
       });
       console.log(
         `${output}: ${manifest.files.length} files, counter ${manifest.counter}`,
