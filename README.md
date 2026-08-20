@@ -65,6 +65,20 @@ is an error, not a skipped check.
 which manifest to fetch and nothing more — every value in it is re-checked against the signed
 manifest before a bundle is installed.
 
+This is the one response a device asks for on every launch, so serve it with a strong `ETag`. Graft
+records the tag once the work a document implies has succeeded, and sends it back as `If-None-Match`;
+publishing is rare and launches are not, so the steady state is a 304 with no body. A server that
+sends no `ETag` is fine — graft stores nothing and the exchange stays a plain 200. The tag is
+recorded only on success, so an install that failed is retried on the next launch rather than
+skipped by a tag that outran it.
+
+The tag is stored against the fingerprint it was judged under. A tag says "I have already seen this
+document"; the conclusion drawn from it says "and there was nothing here for me", and that second
+half depends on which binary asked. A release published for the next store build sits in the
+document unselectable, and if the tag survived the update the device would answer 304 and never
+reconsider — stranded on its embedded bundle with an update waiting. Keying the two together makes a
+tag recorded under a previous binary simply not match.
+
 ```jsonc
 {
   "schema": 1,

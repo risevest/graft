@@ -43,7 +43,19 @@ public class GraftHttpClient {
     }
 
     public Call enqueue(@NonNull String url, @NonNull NonEmptyCallback<Response> callback) {
-        Request request = new Request.Builder().url(url).cacheControl(CacheControl.FORCE_NETWORK).build();
+        return enqueue(url, null, callback);
+    }
+
+    /**
+     * @param ifNoneMatch An entity tag from a previous response. When it still matches, the server
+     *                    answers 304 with no body and the caller keeps what it already concluded.
+     */
+    public Call enqueue(@NonNull String url, @Nullable String ifNoneMatch, @NonNull NonEmptyCallback<Response> callback) {
+        Request.Builder builder = new Request.Builder().url(url).cacheControl(CacheControl.FORCE_NETWORK);
+        if (ifNoneMatch != null) {
+            builder.header("If-None-Match", ifNoneMatch);
+        }
+        Request request = builder.build();
 
         Call call = okHttpClient.newCall(request);
         call.enqueue(

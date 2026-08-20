@@ -187,6 +187,7 @@ import Capacitor
 
     @objc public func setChannel(_ options: SetChannelOptions, completion: @escaping (Error?) -> Void) {
         preferences.setChannel(options.getChannel())
+        preferences.setChannelEtag(nil, nativeFingerprint: "")
         completion(nil)
     }
 
@@ -218,21 +219,37 @@ import Capacitor
         let channelUrl = try buildChannelUrl(channel: channel)
         CAPLog.print("[", GraftPlugin.tag, "] Reading channel document: ", channelUrl)
 
-        let document = try JSONDecoder().decode(ChannelDocument.self, from: try await httpClient.data(url: channelUrl))
+        let fingerprint = try nativeFingerprint()
+        let channelResponse = try await httpClient.conditionalData(
+            url: channelUrl,
+            etag: preferences.getChannelEtag(nativeFingerprint: fingerprint)
+        )
+        guard let channelData = channelResponse.data else {
+            CAPLog.print("[", GraftPlugin.tag, "] ", "Channel document is unchanged. No update available.")
+            return SyncResult(nextBundleId: nil)
+        }
+        // Recorded only once the work this document implies has succeeded, so a failed install is
+        // retried on the next launch rather than skipped by a tag that outran it.
+        func completed(_ result: SyncResult) -> SyncResult {
+            preferences.setChannelEtag(channelResponse.etag, nativeFingerprint: fingerprint)
+            return result
+        }
+
+        let document = try JSONDecoder().decode(ChannelDocument.self, from: channelData)
         if document.killSwitch {
             CAPLog.print("[", GraftPlugin.tag, "] ", "Kill switch is enabled. Reverting to the embedded bundle.")
             setNextBundleById(nil)
-            return SyncResult(nextBundleId: nil)
+            return completed(SyncResult(nextBundleId: nil))
         }
         guard let release = ReleaseSelector.select(
             from: document.releases,
-            nativeFingerprint: try nativeFingerprint(),
+            nativeFingerprint: fingerprint,
             highestInstalledCounter: preferences.getHighestInstalledCounter(),
             bucket: ReleaseSelector.bucket(for: preferences.getInstallId()),
             blockedBundleIds: getBlockedBundleIds()
         ) else {
             CAPLog.print("[", GraftPlugin.tag, "] ", "No update available.")
-            return SyncResult(nextBundleId: nil)
+            return completed(SyncResult(nextBundleId: nil))
         }
         let manifestUrl = try resolveManifestUrl(channelUrl: channelUrl, manifest: release.manifest)
         CAPLog.print("[", GraftPlugin.tag, "] Reading manifest: ", manifestUrl)
@@ -247,13 +264,13 @@ import Capacitor
         // can have been replaced since they landed.
         if hasBundleById(release.id) {
             stageRelease(bundleId: release.id, counter: release.counter)
-            return SyncResult(nextBundleId: release.id)
+            return completed(SyncResult(nextBundleId: release.id))
         }
 
         try verifyNoFileCollidesWithManifest(manifest, manifestUrl: manifestUrl)
         try await install(manifest: manifest, manifestData: manifestData, manifestUrl: manifestUrl)
         stageRelease(bundleId: manifest.id, counter: release.counter)
-        return SyncResult(nextBundleId: manifest.id)
+        return completed(SyncResult(nextBundleId: manifest.id))
     }
 
     private func install(manifest: Manifest, manifestData: Data, manifestUrl: URL) async throws {

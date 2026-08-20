@@ -10,6 +10,35 @@ public class GraftHttpClient: NSObject {
         self.config = config
     }
 
+    /// A GET that may answer 304. `data` is nil exactly when the server says nothing changed, in
+    /// which case the caller's stored tag is still current.
+    public struct ConditionalData {
+        public let data: Data?
+        public let etag: String?
+    }
+
+    public func conditionalData(url: URL, etag: String?) async throws -> ConditionalData {
+        var request = buildRequest(url: url)
+        if let etag = etag {
+            request.setValue(etag, forHTTPHeaderField: "If-None-Match")
+        }
+        let response = await AF.request(request)
+            .validate(statusCode: [200, 304])
+            .serializingData(emptyResponseCodes: [204, 205, 304])
+            .response
+        if let error = response.error {
+            throw unwrap(error)
+        }
+        let served = response.response?.value(forHTTPHeaderField: "Etag")
+        if response.response?.statusCode == 304 {
+            return ConditionalData(data: nil, etag: etag)
+        }
+        guard let data = response.value else {
+            throw CustomError.downloadFailed
+        }
+        return ConditionalData(data: data, etag: served)
+    }
+
     public func data(url: URL) async throws -> Data {
         let response = await AF.request(buildRequest(url: url)).validate().serializingData().response
         if let error = response.error {

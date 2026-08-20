@@ -10,13 +10,13 @@ import java.util.UUID;
 public class GraftPreferences {
 
     static final String BLOCKED_BUNDLE_IDS_KEY = "blockedBundleIds";
+    static final String CHANNEL_ETAG_KEY = "channelEtag";
     static final String CHANNEL_KEY = "channel";
     static final String HIGHEST_INSTALLED_COUNTER_KEY = "highestInstalledCounter";
     static final String INSTALL_ID_KEY = "installId";
     static final String LAST_FAILED_BUNDLE_ID_KEY = "lastFailedBundleId";
     static final String LAST_FAILED_COUNT_KEY = "lastFailedCount";
     static final String LAST_KNOWN_GOOD_BUNDLE_ID_KEY = "lastKnownGoodBundleId";
-    static final String LAST_NATIVE_FINGERPRINT_KEY = "lastNativeFingerprint";
     static final String PREVIOUS_BUNDLE_ID_KEY = "previousBundleId";
 
     @NonNull
@@ -34,6 +34,24 @@ public class GraftPreferences {
     @Nullable
     public String getBlockedBundleIds() {
         return preferences.getString(BLOCKED_BUNDLE_IDS_KEY, null);
+    }
+
+    /**
+      * The tag is only worth sending while the conclusion drawn from that document still holds, and
+      * that conclusion depends on which binary asked. Storing the two together makes a tag recorded
+      * under a previous binary simply not match, so the document is re-read after a store update.
+      */
+    @Nullable
+    public String getChannelEtag(@NonNull String nativeFingerprint) {
+        String stored = preferences.getString(CHANNEL_ETAG_KEY, null);
+        if (stored == null) {
+            return null;
+        }
+        int separator = stored.indexOf('\n');
+        if (separator < 0 || !stored.substring(0, separator).equals(nativeFingerprint)) {
+            return null;
+        }
+        return stored.substring(separator + 1);
     }
 
     @Nullable
@@ -91,7 +109,12 @@ public class GraftPreferences {
         putString(BLOCKED_BUNDLE_IDS_KEY, blockedBundleIds);
     }
 
+    public void setChannelEtag(@Nullable String etag, @NonNull String nativeFingerprint) {
+        putString(CHANNEL_ETAG_KEY, etag == null ? null : nativeFingerprint + "\n" + etag);
+    }
+
     public void setChannel(@Nullable String channel) {
+        putString(CHANNEL_ETAG_KEY, null);
         putString(CHANNEL_KEY, channel);
     }
 
