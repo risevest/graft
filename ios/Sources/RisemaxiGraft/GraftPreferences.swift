@@ -2,13 +2,13 @@ import Foundation
 
 public class GraftPreferences: NSObject {
     private let blockedBundleIdsKey = "blockedBundleIds"
+    private let channelEtagKey = "channelEtag"
     private let channelKey = "channel"
     private let highestInstalledCounterKey = "highestInstalledCounter"
     private let installIdKey = "installId"
     private let lastFailedBundleIdKey = "lastFailedBundleId"
     private let lastFailedCountKey = "lastFailedCount"
     private let lastKnownGoodBundleIdKey = "lastKnownGoodBundleId"
-    private let lastNativeFingerprintKey = "lastNativeFingerprint"
     private let previousBundleIdKey = "previousBundleId"
 
     public func getBlockedBundleIds() -> String? {
@@ -51,15 +51,31 @@ public class GraftPreferences: NSObject {
         }
     }
 
+    /// The tag is only worth sending while the conclusion drawn from that document still holds, and
+    /// that conclusion depends on which binary asked. Storing the two together makes a tag recorded
+    /// under a previous binary simply not match, so the document is re-read after a store update.
+    public func getChannelEtag(nativeFingerprint: String) -> String? {
+        guard let stored = UserDefaults.standard.object(forKey: applyPrefix(to: channelEtagKey)) as? String,
+              let separator = stored.firstIndex(of: "\n"),
+              stored[stored.startIndex..<separator] == nativeFingerprint else {
+            return nil
+        }
+        return String(stored[stored.index(after: separator)...])
+    }
+
+    public func setChannelEtag(_ value: String?, nativeFingerprint: String) {
+        if let value = value {
+            UserDefaults.standard.set("\(nativeFingerprint)\n\(value)", forKey: applyPrefix(to: channelEtagKey))
+        } else {
+            UserDefaults.standard.removeObject(forKey: applyPrefix(to: channelEtagKey))
+        }
+    }
+
     public func getLastKnownGoodBundleId() -> String? {
         return UserDefaults.standard.string(forKey: applyPrefix(to: lastKnownGoodBundleIdKey))
     }
 
     /// - Returns: The build the pointer was last reconciled against, or `nil` on a fresh install.
-    public func getLastNativeFingerprint() -> String? {
-        return UserDefaults.standard.object(forKey: applyPrefix(to: lastNativeFingerprintKey)) as? String
-    }
-
     public func getPreviousBundleId() -> String? {
         return UserDefaults.standard.string(forKey: applyPrefix(to: previousBundleIdKey))
     }
@@ -78,10 +94,6 @@ public class GraftPreferences: NSObject {
 
     public func setLastKnownGoodBundleId(_ value: String?) {
         setString(value, forKey: lastKnownGoodBundleIdKey)
-    }
-
-    public func setLastNativeFingerprint(_ value: String) {
-        UserDefaults.standard.set(value, forKey: applyPrefix(to: lastNativeFingerprintKey))
     }
 
     public func setPreviousBundleId(_ value: String?) {

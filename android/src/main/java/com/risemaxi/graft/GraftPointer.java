@@ -54,7 +54,7 @@ public final class GraftPointer {
 
     @Nullable
     private static File activeBundleDirectory(@NonNull Context context) {
-        applyBinaryChangeRetention(context);
+        discardBundlesThisBinaryCannotServe(context);
         String bundleId = getActiveBundleId(context);
         if (bundleId == null) {
             return null;
@@ -101,10 +101,15 @@ public final class GraftPointer {
 
     /**
      * Capacitor discards its own server path whenever the binary changes, which would silently
-     * downgrade a device to whatever the store build embeds. We read our own pointer instead, so the
-     * same decision is made here — but only for bundles the new binary genuinely cannot serve.
+     * downgrade a device to whatever the store build embeds. We keep our own pointer instead and drop
+     * only the bundles this binary genuinely cannot serve.
+     *
+     * Runs on every launch rather than only when the binary changed. The comparison it makes is
+     * against the bundle on disk, so it needs no memory of previous launches, and reaching the same
+     * answer costs two manifest reads — hundredths of a millisecond against a file already in page
+     * cache. Remembering instead would mean storing a fact whose source of truth is that same file.
      */
-    private static void applyBinaryChangeRetention(@NonNull Context context) {
+    private static void discardBundlesThisBinaryCannotServe(@NonNull Context context) {
         Manifest embeddedManifest = readEmbeddedManifest(context);
         String fingerprint = embeddedManifest == null ? null : embeddedManifest.getNativeFingerprint();
         if (fingerprint == null) {
@@ -112,10 +117,6 @@ public final class GraftPointer {
             return;
         }
         SharedPreferences preferences = GraftPreferences.getSharedPreferences(context);
-        if (fingerprint.equals(preferences.getString(GraftPreferences.LAST_NATIVE_FINGERPRINT_KEY, null))) {
-            return;
-        }
-
         String activeBundleId = getActiveBundleId(context);
         if (activeBundleId != null && !isBundleRunnable(context, activeBundleId, fingerprint, embeddedManifest)) {
             Logger.debug(GraftPlugin.TAG, "Discarding bundle " + activeBundleId + ": it was built against different native code.");
@@ -126,7 +127,7 @@ public final class GraftPointer {
             preferences.edit().remove(GraftPreferences.LAST_KNOWN_GOOD_BUNDLE_ID_KEY).apply();
         }
 
-        SharedPreferences.Editor editor = preferences.edit().putString(GraftPreferences.LAST_NATIVE_FINGERPRINT_KEY, fingerprint);
+        SharedPreferences.Editor editor = preferences.edit();
         Long embeddedCounter = embeddedManifest == null ? null : embeddedManifest.getCounter();
         if (embeddedCounter != null && embeddedCounter > preferences.getLong(GraftPreferences.HIGHEST_INSTALLED_COUNTER_KEY, 0)) {
             editor.putLong(GraftPreferences.HIGHEST_INSTALLED_COUNTER_KEY, embeddedCounter);

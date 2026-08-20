@@ -334,33 +334,56 @@ public class Graft {
             HttpUrl channelUrl = buildChannelUrl(channel);
             Logger.debug(GraftPlugin.TAG, "Reading channel document: " + channelUrl);
 
+            String fingerprint = nativeFingerprint();
             httpClient.enqueue(
                 channelUrl.toString(),
+                preferences.getChannelEtag(fingerprint),
                 new NonEmptyCallback<Response>() {
                     @Override
                     public void success(@NonNull Response response) {
                         try {
+                            if (response.code() == 304) {
+                                Logger.debug(GraftPlugin.TAG, "Channel document is unchanged. No update available.");
+                                completion.success(new SyncResult(null));
+                                return;
+                            }
+                            String etag = response.header("ETag");
+                            // Recorded only once the work this document implies has succeeded, so a
+                            // failed install is retried on the next launch rather than skipped by a
+                            // tag that outran it.
+                            NonEmptyCallback<Result> completed = new NonEmptyCallback<Result>() {
+                                @Override
+                                public void success(@NonNull Result result) {
+                                    preferences.setChannelEtag(etag, fingerprint);
+                                    completion.success(result);
+                                }
+
+                                @Override
+                                public void error(@NonNull Exception exception) {
+                                    completion.error(exception);
+                                }
+                            };
                             String body = readBody(response);
                             ChannelDocument document = new ChannelDocument(new JSONObject(body));
                             if (document.isKillSwitchEnabled()) {
                                 Logger.warn(GraftPlugin.TAG, "Kill switch is enabled. Reverting to the embedded bundle.");
                                 setNextBundleById(null);
-                                completion.success(new SyncResult(null));
+                                completed.success(new SyncResult(null));
                                 return;
                             }
                             ChannelRelease release = ReleaseSelector.select(
                                 document.getReleases(),
-                                nativeFingerprint(),
+                                fingerprint,
                                 preferences.getHighestInstalledCounter(),
                                 ReleaseSelector.bucketFor(preferences.getInstallId()),
                                 getBlockedBundleIds()
                             );
                             if (release == null) {
                                 Logger.debug(GraftPlugin.TAG, "No update available.");
-                                completion.success(new SyncResult(null));
+                                completed.success(new SyncResult(null));
                                 return;
                             }
-                            installRelease(channelUrl, release, channel, publicKey, completion);
+                            installRelease(channelUrl, release, channel, publicKey, completed);
                         } catch (Exception exception) {
                             completion.error(exception);
                         }
